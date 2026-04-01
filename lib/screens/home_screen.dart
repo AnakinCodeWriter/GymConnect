@@ -19,6 +19,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _recommendationService = RecommendationService();
 
   Recommendation? _recommendation;
+  NextWorkoutSuggestion? _nextWorkout;
 
   @override
   void initState() {
@@ -33,6 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final workouts = await _workoutService.getWorkouts(uid);
     setState(() {
       _recommendation = _recommendationService.generate(workouts);
+      _nextWorkout = _recommendationService.suggestNextWorkout(workouts);
     });
   }
 
@@ -90,6 +92,10 @@ class _HomeScreenState extends State<HomeScreen> {
             // only shown once the recommendation has loaded from Firestore.
             if (_recommendation != null)
               _RecommendationCard(recommendation: _recommendation!),
+            if (_nextWorkout != null) ...[
+              const SizedBox(height: 12),
+              _NextWorkoutCard(suggestion: _nextWorkout!),
+            ],
           ],
         ),
       ),
@@ -149,6 +155,61 @@ class _RecommendationCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   recommendation.message,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Shows what muscle group to train next based on the most recent workout.
+class _NextWorkoutCard extends StatelessWidget {
+  final NextWorkoutSuggestion suggestion;
+
+  const _NextWorkoutCard({required this.suggestion});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.purple.withAlpha(20),
+        border: Border.all(color: Colors.purple.withAlpha(80)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.event_note, color: Colors.purple, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Suggested Next Workout',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  suggestion.title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.purple,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  suggestion.message,
                   style: const TextStyle(fontSize: 13),
                 ),
               ],

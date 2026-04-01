@@ -15,6 +15,13 @@ class Recommendation {
   });
 }
 
+class NextWorkoutSuggestion {
+  final String title;
+  final String message;
+
+  const NextWorkoutSuggestion({required this.title, required this.message});
+}
+
 class RecommendationService {
   // muscle groups used to detect whether training is balanced.
   // each entry maps a keyword (found in exercise names) to a group label.
@@ -133,6 +140,56 @@ class RecommendationService {
       type: RecommendationType.keepGoing,
       title: 'Keep it up!',
       message: 'Your training looks well-rounded. Keep logging your sessions to track your progress.',
+    );
+  }
+
+  // Suggests what muscle group to train next based on the most recent workout.
+  // Looks only at the last workout, not the full history.
+  NextWorkoutSuggestion suggestNextWorkout(List<WorkoutModel> workouts) {
+    if (workouts.isEmpty) {
+      return const NextWorkoutSuggestion(
+        title: 'Full Body Beginner Workout',
+        message: 'You have not logged any workouts yet. A full body session is a great place to start.',
+      );
+    }
+
+    // workouts are ordered newest first (see WorkoutService), so index 0 is most recent.
+    final lastWorkout = workouts.first;
+
+    // Count how many exercises in the last workout belong to upper vs lower body.
+    int upperCount = 0;
+    int lowerCount = 0;
+
+    const upperKeywords = ['bench', 'press', 'row', 'pull', 'lat', 'curl', 'shoulder', 'chest', 'tricep', 'bicep', 'back', 'push'];
+    const lowerKeywords = ['squat', 'leg', 'deadlift', 'lunge', 'calf'];
+
+    for (final exercise in lastWorkout.exercises) {
+      final name = exercise.name.toLowerCase();
+      if (upperKeywords.any((k) => name.contains(k))) {
+        upperCount++;
+      } else if (lowerKeywords.any((k) => name.contains(k))) {
+        lowerCount++;
+      }
+    }
+
+    if (upperCount > lowerCount) {
+      return const NextWorkoutSuggestion(
+        title: 'Lower Body Workout',
+        message: 'You recently focused on upper body, so training lower body next will help maintain balance.',
+      );
+    }
+
+    if (lowerCount > upperCount) {
+      return const NextWorkoutSuggestion(
+        title: 'Upper Body Workout',
+        message: 'You recently focused on lower body, so training upper body next will help maintain balance.',
+      );
+    }
+
+    // Mixed or unclear — suggest full body
+    return const NextWorkoutSuggestion(
+      title: 'Full Body Workout',
+      message: 'Your last session was mixed. A full body workout is a solid next choice.',
     );
   }
 
