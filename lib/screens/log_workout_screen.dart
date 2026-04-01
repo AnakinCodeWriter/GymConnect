@@ -15,6 +15,8 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   final WorkoutService _workoutService = WorkoutService();
 
   final List<_ExerciseData> _exercises = [];
+  // full workout history, sorted newest first — used for repeat and suggestions
+  List<WorkoutModel> _workouts = [];
   // exercise names from history, used for chips and autocomplete suggestions
   List<String> _recentExercises = [];
   // maps exercise name -> last logged set, used to prefill weight/reps
@@ -35,8 +37,56 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
     final uid = FirebaseAuth.instance.currentUser!.uid;
     final workouts = await _workoutService.getWorkouts(uid);
     setState(() {
+      _workouts = workouts;
       _recentExercises = _workoutService.extractExerciseNames(workouts);
       _lastSets = _workoutService.getLastSetsByExercise(workouts);
+    });
+  }
+
+  // populates the screen with the exercises and sets from the most recent workout.
+  // if exercises are already on screen, asks the user to confirm before replacing them.
+  Future<void> _repeatLastWorkout() async {
+    if (_workouts.isEmpty) return;
+
+    if (_exercises.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Replace current workout?'),
+          content: const Text(
+            'Loading the last workout will replace what you have entered. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    final last = _workouts.first;
+    setState(() {
+      // dispose existing entries before replacing them
+      for (final ex in _exercises) {
+        ex.dispose();
+      }
+      _exercises.clear();
+
+      // rebuild the exercise list from the last workout's data
+      for (final entry in last.exercises) {
+        final ex = _ExerciseData()..name = entry.name;
+        for (final set in entry.sets) {
+          ex.sets.add(_SetData.fromWorkoutSet(set));
+        }
+        _exercises.add(ex);
+      }
     });
   }
 
@@ -190,6 +240,19 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
             _RecentExercisesRow(
               names: _recentExercises,
               onTap: _addExerciseWithName,
+            ),
+          // repeat button — only shown when the user has at least one previous workout
+          if (_workouts.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _repeatLastWorkout,
+                  icon: const Icon(Icons.replay, size: 18),
+                  label: const Text('Repeat Last Workout'),
+                ),
+              ),
             ),
           Expanded(
             child: _exercises.isEmpty
