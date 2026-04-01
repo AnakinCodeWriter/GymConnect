@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
+import '../services/firestore_service.dart';
 import '../services/workout_service.dart';
 import '../services/recommendation_service.dart';
 import 'log_workout_screen.dart';
@@ -17,22 +18,30 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _workoutService = WorkoutService();
   final _recommendationService = RecommendationService();
+  final _firestoreService = FirestoreService();
 
   Recommendation? _recommendation;
   NextWorkoutSuggestion? _nextWorkout;
+  String? _displayName;
 
   @override
   void initState() {
     super.initState();
-    _loadRecommendation();
+    _loadData();
   }
 
-  // fetches the user's workouts from Firestore and passes them to the
-  // recommendation service to generate a contextual suggestion.
-  Future<void> _loadRecommendation() async {
+  // fetches the user profile and workouts from Firestore in parallel,
+  // then generates the recommendation and next workout suggestion.
+  Future<void> _loadData() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final workouts = await _workoutService.getWorkouts(uid);
+    // start both requests before awaiting either, so they run in parallel.
+    final profileFuture = _firestoreService.getUserProfile(uid);
+    final workoutsFuture = _workoutService.getWorkouts(uid);
+    final profile = await profileFuture;
+    final workouts = await workoutsFuture;
     setState(() {
+      final name = profile?.displayName;
+      _displayName = (name != null && name.isNotEmpty) ? name : null;
       _recommendation = _recommendationService.generate(workouts);
       _nextWorkout = _recommendationService.suggestNextWorkout(workouts);
     });
@@ -58,7 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Welcome, ${user?.email ?? 'User'}!',
+              'Welcome, ${_displayName ?? user?.email ?? 'User'}!',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),

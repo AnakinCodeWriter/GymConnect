@@ -14,16 +14,49 @@ class LogWorkoutScreen extends StatefulWidget {
 class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   final WorkoutService _workoutService = WorkoutService();
 
-  // Each exercise is a map with a name controller and a list of set rows.
-  // set row = {weightController, repsController}
   final List<_ExerciseData> _exercises = [];
+  // exercise names from history, used for chips and autocomplete suggestions
+  List<String> _recentExercises = [];
+  // maps exercise name -> last logged set, used to prefill weight/reps
+  Map<String, WorkoutSet> _lastSets = {};
 
   bool _saving = false;
   String? _error;
 
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  // fetches workout history once and derives both the exercise name list
+  // and the last-set map — avoiding two separate Firestore calls.
+  Future<void> _loadHistory() async {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final workouts = await _workoutService.getWorkouts(uid);
+    setState(() {
+      _recentExercises = _workoutService.extractExerciseNames(workouts);
+      _lastSets = _workoutService.getLastSetsByExercise(workouts);
+    });
+  }
+
   void _addExercise() {
     setState(() {
       _exercises.add(_ExerciseData());
+    });
+  }
+
+  // adds a new exercise card with the name already filled in —
+  // called when the user taps a chip in the Recent Exercises row.
+  // also prefills the first set if this exercise has been logged before.
+  void _addExerciseWithName(String name) {
+    setState(() {
+      final ex = _ExerciseData()..name = name;
+      final lastSet = _lastSets[name];
+      if (lastSet != null) {
+        ex.sets.add(_SetData.fromWorkoutSet(lastSet));
+      }
+      _exercises.add(ex);
     });
   }
 
@@ -36,7 +69,17 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
 
   void _addSet(int exerciseIndex) {
     setState(() {
-      _exercises[exerciseIndex].sets.add(_SetData());
+      final sets = _exercises[exerciseIndex].sets;
+      if (sets.isNotEmpty) {
+        // prefill the new set with the previous set's current values
+        final prev = sets.last;
+        sets.add(_SetData(
+          weight: prev.weightController.text,
+          reps: prev.repsController.text,
+        ));
+      } else {
+        sets.add(_SetData());
+      }
     });
   }
 
@@ -58,7 +101,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
       return;
     }
     for (final ex in _exercises) {
-      if (ex.nameController.text.trim().isEmpty) {
+      if (ex.name.trim().isEmpty) {
         setState(() => _error = 'Every exercise needs a name.');
         return;
       }
@@ -87,7 +130,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
             reps: int.parse(s.repsController.text.trim()),
           );
         }).toList();
-        return ExerciseEntry(name: ex.nameController.text.trim(), sets: sets);
+        return ExerciseEntry(name: ex.name.trim(), sets: sets);
       }).toList();
 
       final workout = WorkoutModel(
@@ -142,6 +185,12 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(_error!, style: const TextStyle(color: Colors.red)),
             ),
+          // chips row — only rendered once history has been loaded
+          if (_recentExercises.isNotEmpty)
+            _RecentExercisesRow(
+              names: _recentExercises,
+              onTap: _addExerciseWithName,
+            ),
           Expanded(
             child: _exercises.isEmpty
                 ? const Center(
@@ -186,14 +235,43 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
             Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: ex.nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Exercise name',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    textCapitalization: TextCapitalization.words,
+                  // Autocomplete shows filtered suggestions from _recentExercises
+                  // as the user types. initialValue pre-fills the field when a
+                  // chip was tapped before this card was built.
+                  child: Autocomplete<String>(
+                    initialValue: TextEditingValue(text: ex.name),
+                    optionsBuilder: (value) {
+                      if (value.text.isEmpty) return const Iterable<String>.empty();
+                      final query = value.text.toLowerCase();
+                      return _recentExercises.where(
+                        (name) => name.toLowerCase().contains(query),
+                      );
+                    },
+                    // when the user selects a suggestion, update the stored name
+                    // and prefill the first set if this exercise has been logged before.
+                    onSelected: (value) => setState(() {
+                      ex.name = value;
+                      if (ex.sets.isEmpty) {
+                        final lastSet = _lastSets[value];
+                        if (lastSet != null) {
+                          ex.sets.add(_SetData.fromWorkoutSet(lastSet));
+                        }
+                      }
+                    }),
+                    fieldViewBuilder: (context, controller, focusNode, _) {
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        // keep ex.name in sync as the user types freely
+                        onChanged: (value) => ex.name = value,
+                        decoration: const InputDecoration(
+                          labelText: 'Exercise name',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        textCapitalization: TextCapitalization.words,
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -276,11 +354,12 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
 }
 
 class _ExerciseData {
-  final TextEditingController nameController = TextEditingController();
+  // name is stored as a plain string; the Autocomplete widget in the card
+  // keeps it in sync via onChanged and onSelected callbacks.
+  String name = '';
   final List<_SetData> sets = [];
 
   void dispose() {
-    nameController.dispose();
     for (final s in sets) {
       s.dispose();
     }
@@ -288,11 +367,64 @@ class _ExerciseData {
 }
 
 class _SetData {
-  final TextEditingController weightController = TextEditingController();
-  final TextEditingController repsController = TextEditingController();
+  final TextEditingController weightController;
+  final TextEditingController repsController;
+
+  _SetData({String weight = '', String reps = ''})
+      : weightController = TextEditingController(text: weight),
+        repsController = TextEditingController(text: reps);
+
+  // creates a _SetData pre-filled from a previously logged set.
+  // whole-number weights are shown without a trailing .0 (e.g. 60 not 60.0).
+  factory _SetData.fromWorkoutSet(WorkoutSet set) {
+    final weight = set.weight % 1 == 0
+        ? set.weight.toInt().toString()
+        : set.weight.toString();
+    return _SetData(weight: weight, reps: set.reps.toString());
+  }
 
   void dispose() {
     weightController.dispose();
     repsController.dispose();
+  }
+}
+
+// displays a horizontally scrollable row of chips showing the user's most
+// frequently used exercise names. tapping a chip calls onTap with that name,
+// which adds a new exercise card pre-filled with it.
+class _RecentExercisesRow extends StatelessWidget {
+  final List<String> names;
+  final void Function(String) onTap;
+
+  const _RecentExercisesRow({required this.names, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            'Recent Exercises',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+        ),
+        SizedBox(
+          height: 40,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: names.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, i) => ActionChip(
+              label: Text(names[i]),
+              onPressed: () => onTap(names[i]),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+      ],
+    );
   }
 }
