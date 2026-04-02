@@ -18,4 +18,10 @@ class FirestoreService {
     if (!doc.exists) return null;
     return UserModel.fromMap(uid, doc.data()!);
   }
+
+  // updates only the isAnonymous field on the user's profile document.
+  // used when the user toggles their leaderboard visibility preference.
+  Future<void> updateAnonymous(String uid, bool isAnonymous) async {
+    await _db.collection('users').doc(uid).update({'isAnonymous': isAnonymous});
+  }
 }

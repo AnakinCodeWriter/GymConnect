@@ -5,6 +5,8 @@ import '../models/workout_model.dart';
 import '../models/template_model.dart';
 import '../services/workout_service.dart';
 import '../services/template_service.dart';
+import '../services/firestore_service.dart';
+import '../services/leaderboard_service.dart';
 import 'workout_templates_screen.dart';
 
 class LogWorkoutScreen extends StatefulWidget {
@@ -17,6 +19,8 @@ class LogWorkoutScreen extends StatefulWidget {
 class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   final WorkoutService _workoutService = WorkoutService();
   final TemplateService _templateService = TemplateService();
+  final FirestoreService _firestoreService = FirestoreService();
+  final LeaderboardService _leaderboardService = LeaderboardService();
 
   final List<_ExerciseData> _exercises = [];
   // full workout history, sorted newest first — used for repeat and suggestions
@@ -40,17 +44,22 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   // fetches workout history and templates in parallel, then derives
   // the exercise name list and last-set map from the workout history.
   Future<void> _loadHistory() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final workoutsFuture = _workoutService.getWorkouts(uid);
-    final templatesFuture = _templateService.getTemplates(uid);
-    final workouts = await workoutsFuture;
-    final templates = await templatesFuture;
-    setState(() {
-      _workouts = workouts;
-      _templates = templates;
-      _recentExercises = _workoutService.extractExerciseNames(workouts);
-      _lastSets = _workoutService.getLastSetsByExercise(workouts);
-    });
+    try {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final workoutsFuture = _workoutService.getWorkouts(uid);
+      final templatesFuture = _templateService.getTemplates(uid);
+      final workouts = await workoutsFuture;
+      final templates = await templatesFuture;
+      if (!mounted) return;
+      setState(() {
+        _workouts = workouts;
+        _templates = templates;
+        _recentExercises = _workoutService.extractExerciseNames(workouts);
+        _lastSets = _workoutService.getLastSetsByExercise(workouts);
+      });
+    } catch (_) {
+      // silently ignore — the screen remains usable with empty state
+    }
   }
 
   // populates the screen with the exercises and sets from the most recent workout.
@@ -261,6 +270,22 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
       );
 
       await _workoutService.saveWorkout(uid, workout);
+
+      // update the leaderboard in the background — a failure here does not
+      // affect the workout save, which has already succeeded at this point.
+      _firestoreService.getUserProfile(uid).then((profile) {
+        if (profile != null && profile.gymId.isNotEmpty) {
+          return _leaderboardService.updateUserBestLifts(
+            uid,
+            profile.gymId,
+            profile.displayName,
+            profile.isAnonymous,
+            workout,
+          );
+        }
+      }).catchError((_) {
+        // silently ignore leaderboard errors — the workout is already saved
+      });
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {

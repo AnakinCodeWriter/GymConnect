@@ -7,6 +7,7 @@ import '../services/recommendation_service.dart';
 import 'log_workout_screen.dart';
 import 'progress_screen.dart';
 import 'starter_plan_screen.dart';
+import 'leaderboard_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,18 +34,24 @@ class _HomeScreenState extends State<HomeScreen> {
   // fetches the user profile and workouts from Firestore in parallel,
   // then generates the recommendation and next workout suggestion.
   Future<void> _loadData() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    // start both requests before awaiting either, so they run in parallel.
-    final profileFuture = _firestoreService.getUserProfile(uid);
-    final workoutsFuture = _workoutService.getWorkouts(uid);
-    final profile = await profileFuture;
-    final workouts = await workoutsFuture;
-    setState(() {
-      final name = profile?.displayName;
-      _displayName = (name != null && name.isNotEmpty) ? name : null;
-      _recommendation = _recommendationService.generate(workouts);
-      _nextWorkout = _recommendationService.suggestNextWorkout(workouts);
-    });
+    try {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      // start both requests before awaiting either, so they run in parallel.
+      final profileFuture = _firestoreService.getUserProfile(uid);
+      final workoutsFuture = _workoutService.getWorkouts(uid);
+      final profile = await profileFuture;
+      final workouts = await workoutsFuture;
+      if (!mounted) return;
+      setState(() {
+        final name = profile?.displayName;
+        _displayName = (name != null && name.isNotEmpty) ? name : null;
+        _recommendation = _recommendationService.generate(workouts);
+        _nextWorkout = _recommendationService.suggestNextWorkout(workouts);
+      });
+    } catch (_) {
+      // silently ignore load errors — the home screen remains usable
+      // and the user can still navigate or sign out
+    }
   }
 
   @override
@@ -91,6 +98,15 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               icon: const Icon(Icons.bar_chart),
               label: const Text('View Progress'),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LeaderboardScreen()),
+              ),
+              icon: const Icon(Icons.leaderboard),
+              label: const Text('Gym Leaderboard'),
             ),
             const SizedBox(height: 8),
             TextButton.icon(

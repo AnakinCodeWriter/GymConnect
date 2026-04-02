@@ -5,12 +5,15 @@ class UserModel {
   final String displayName;
   final String gymId;
   final Timestamp createdAt;
+  // whether the user appears as "Anonymous" on the gym leaderboard
+  final bool isAnonymous;
 
   UserModel({
     required this.uid,
     required this.displayName,
     required this.gymId,
     required this.createdAt,
+    this.isAnonymous = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -18,6 +21,7 @@ class UserModel {
       'displayName': displayName,
       'gymId': gymId,
       'createdAt': createdAt,
+      'isAnonymous': isAnonymous,
     };
   }
 
@@ -27,6 +31,9 @@ class UserModel {
       displayName: map['displayName'] ?? '',
       gymId: map['gymId'] ?? '',
       createdAt: map['createdAt'] ?? Timestamp.now(),
+      // nullable read with false fallback so existing accounts without this
+      // field are treated as non-anonymous by default
+      isAnonymous: map['isAnonymous'] as bool? ?? false,
     );
   }
 }
