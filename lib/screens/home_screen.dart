@@ -72,10 +72,14 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const LogWorkoutScreen()),
-              ),
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LogWorkoutScreen()),
+                );
+                // reload so the recommendation reflects any newly logged workouts
+                if (mounted) _loadData();
+              },
               icon: const Icon(Icons.fitness_center),
               label: const Text('Log Workout'),
             ),

@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/workout_model.dart';
+import '../models/template_model.dart';
 import '../services/workout_service.dart';
+import '../services/template_service.dart';
+import 'workout_templates_screen.dart';
 
 class LogWorkoutScreen extends StatefulWidget {
   const LogWorkoutScreen({super.key});
@@ -13,10 +16,13 @@ class LogWorkoutScreen extends StatefulWidget {
 
 class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   final WorkoutService _workoutService = WorkoutService();
+  final TemplateService _templateService = TemplateService();
 
   final List<_ExerciseData> _exercises = [];
   // full workout history, sorted newest first — used for repeat and suggestions
   List<WorkoutModel> _workouts = [];
+  // saved templates for this user, used to populate the Load Template dialog
+  List<TemplateModel> _templates = [];
   // exercise names from history, used for chips and autocomplete suggestions
   List<String> _recentExercises = [];
   // maps exercise name -> last logged set, used to prefill weight/reps
@@ -31,13 +37,17 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
     _loadHistory();
   }
 
-  // fetches workout history once and derives both the exercise name list
-  // and the last-set map — avoiding two separate Firestore calls.
+  // fetches workout history and templates in parallel, then derives
+  // the exercise name list and last-set map from the workout history.
   Future<void> _loadHistory() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final workouts = await _workoutService.getWorkouts(uid);
+    final workoutsFuture = _workoutService.getWorkouts(uid);
+    final templatesFuture = _templateService.getTemplates(uid);
+    final workouts = await workoutsFuture;
+    final templates = await templatesFuture;
     setState(() {
       _workouts = workouts;
+      _templates = templates;
       _recentExercises = _workoutService.extractExerciseNames(workouts);
       _lastSets = _workoutService.getLastSetsByExercise(workouts);
     });
@@ -88,6 +98,67 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
         _exercises.add(ex);
       }
     });
+  }
+
+  // populates the screen with exercises from the selected template.
+  // uses the same confirmation dialog as _repeatLastWorkout if work is in progress.
+  Future<void> _loadFromTemplate(TemplateModel template) async {
+    if (_exercises.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Replace current workout?'),
+          content: const Text(
+            'Loading this template will replace what you have entered. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    setState(() {
+      for (final ex in _exercises) {
+        ex.dispose();
+      }
+      _exercises.clear();
+
+      for (final entry in template.exercises) {
+        final ex = _ExerciseData()..name = entry.name;
+        for (final set in entry.sets) {
+          ex.sets.add(_SetData.fromTemplateSet(set));
+        }
+        _exercises.add(ex);
+      }
+    });
+  }
+
+  // shows a dialog listing the user's saved templates for selection.
+  Future<void> _showLoadTemplateDialog() async {
+    final selected = await showDialog<TemplateModel>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Load Template'),
+        children: _templates
+            .map(
+              (t) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, t),
+                child: Text(t.name),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (selected != null) _loadFromTemplate(selected);
   }
 
   void _addExercise() {
@@ -214,6 +285,20 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
       appBar: AppBar(
         title: const Text('Log Workout'),
         actions: [
+          // navigate to the templates screen; reload on return in case
+          // the user created or edited a template while there.
+          IconButton(
+            icon: const Icon(Icons.playlist_add_check),
+            tooltip: 'Manage Templates',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const WorkoutTemplatesScreen()),
+              );
+              _loadHistory();
+            },
+          ),
           TextButton(
             onPressed: _saving ? null : _saveWorkout,
             child: _saving
@@ -251,6 +336,19 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
                   onPressed: _repeatLastWorkout,
                   icon: const Icon(Icons.replay, size: 18),
                   label: const Text('Repeat Last Workout'),
+                ),
+              ),
+            ),
+          // load template button — only shown when saved templates exist
+          if (_templates.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _showLoadTemplateDialog,
+                  icon: const Icon(Icons.folder_open, size: 18),
+                  label: const Text('Load Template'),
                 ),
               ),
             ),
@@ -443,6 +541,17 @@ class _SetData {
     final weight = set.weight % 1 == 0
         ? set.weight.toInt().toString()
         : set.weight.toString();
+    return _SetData(weight: weight, reps: set.reps.toString());
+  }
+
+  // creates a _SetData from a template set.
+  // weight is left blank if the template set had no weight defined.
+  factory _SetData.fromTemplateSet(TemplateSet set) {
+    final weight = set.weight == null
+        ? ''
+        : set.weight! % 1 == 0
+            ? set.weight!.toInt().toString()
+            : set.weight!.toString();
     return _SetData(weight: weight, reps: set.reps.toString());
   }
 
