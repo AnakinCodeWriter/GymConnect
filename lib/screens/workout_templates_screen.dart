@@ -43,12 +43,17 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
   }
 
   Future<void> _loadTemplates() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final templates = await _templateService.getTemplates(uid);
-    setState(() {
-      _templates = templates;
-      _loading = false;
-    });
+    try {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final templates = await _templateService.getTemplates(uid);
+      if (!mounted) return;
+      setState(() {
+        _templates = templates;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   // switches to editor mode, optionally pre-filling with an existing template.

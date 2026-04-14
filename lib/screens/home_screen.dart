@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../services/workout_service.dart';
 import '../services/recommendation_service.dart';
+import 'login_screen.dart';
 import 'log_workout_screen.dart';
 import 'progress_screen.dart';
 import 'starter_plan_screen.dart';
@@ -64,7 +65,14 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Sign out',
-            onPressed: () => AuthService().signOut(),
+            onPressed: () async {
+              final navigator = Navigator.of(context);
+              await AuthService().signOut();
+              navigator.pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
           ),
         ],
       ),

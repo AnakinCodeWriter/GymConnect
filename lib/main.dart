@@ -64,7 +64,8 @@ class ProfileChecker extends StatelessWidget {
     return FutureBuilder<bool>(
       future: FirestoreService().userProfileExists(uid),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting ||
+            snapshot.hasError) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );

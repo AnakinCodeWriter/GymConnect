@@ -33,29 +33,36 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
   // fetches the user's profile (for gymId and anonymity setting)
   // then loads the leaderboard for their gym.
   Future<void> _loadData() async {
-    _uid = FirebaseAuth.instance.currentUser!.uid;
-    final profile = await _firestoreService.getUserProfile(_uid!);
+    try {
+      _uid = FirebaseAuth.instance.currentUser!.uid;
+      final profile = await _firestoreService.getUserProfile(_uid!);
 
-    if (profile == null || profile.gymId.isEmpty) {
-      setState(() => _loading = false);
-      return;
+      if (!mounted) return;
+
+      if (profile == null || profile.gymId.isEmpty) {
+        setState(() => _loading = false);
+        return;
+      }
+
+      _gymId = profile.gymId;
+      final entries = await _leaderboardService.getLeaderboard(_gymId!);
+
+      // collect all exercise names that exist across all entries, then sort
+      final exerciseSet = <String>{};
+      for (final entry in entries) {
+        exerciseSet.addAll(entry.bestLifts.keys);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _isAnonymous = profile.isAnonymous;
+        _entries = entries;
+        _exercises = exerciseSet.toList()..sort();
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
     }
-
-    _gymId = profile.gymId;
-    final entries = await _leaderboardService.getLeaderboard(_gymId!);
-
-    // collect all exercise names that exist across all entries, then sort
-    final exerciseSet = <String>{};
-    for (final entry in entries) {
-      exerciseSet.addAll(entry.bestLifts.keys);
-    }
-
-    setState(() {
-      _isAnonymous = profile.isAnonymous;
-      _entries = entries;
-      _exercises = exerciseSet.toList()..sort();
-      _loading = false;
-    });
   }
 
   // flips the user's anonymity preference, persisting it to both

@@ -6,6 +6,23 @@ import '../models/user_model.dart';
 import '../widgets/auth_text_field.dart';
 import 'home_screen.dart';
 
+// hardcoded list of gyms available for selection during onboarding.
+// using a fixed list ensures all users at the same gym share an identical
+// gymId string, which is required for the leaderboard to work correctly.
+const _gyms = [
+  'PureGym Bournemouth Triangle',
+  'PureGym Bournemouth Mallard Rd',
+  'PureGym Poole',
+  'PureGym Southampton',
+  'Anytime Fitness Bournemouth',
+  'Anytime Fitness Poole',
+  'JD Gyms Bournemouth',
+  'The Gym Group Bournemouth',
+  'Nuffield Health Bournemouth',
+  'DW Fitness First Bournemouth',
+  'Other',
+];
+
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -15,8 +32,8 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _displayNameController = TextEditingController();
-  final _gymIdController = TextEditingController();
   final _firestoreService = FirestoreService();
+  String? _selectedGym;
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -27,9 +44,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     });
 
     final displayName = _displayNameController.text.trim();
-    final gymId = _gymIdController.text.trim();
+    final gymId = _selectedGym;
 
-    if (displayName.isEmpty || gymId.isEmpty) {
+    if (displayName.isEmpty || gymId == null) {
       setState(() {
         _errorMessage = 'Please fill in all fields.';
         _isLoading = false;
@@ -64,7 +81,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void dispose() {
     _displayNameController.dispose();
-    _gymIdController.dispose();
     super.dispose();
   }
 
@@ -89,9 +105,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               label: 'Display Name',
             ),
             const SizedBox(height: 12),
-            AuthTextField(
-              controller: _gymIdController,
-              label: 'Gym ID',
+            DropdownButtonFormField<String>(
+              initialValue: _selectedGym,
+              decoration: const InputDecoration(
+                labelText: 'Which gym do you attend?',
+                border: OutlineInputBorder(),
+              ),
+              items: _gyms
+                  .map((gym) => DropdownMenuItem(value: gym, child: Text(gym)))
+                  .toList(),
+              onChanged: (value) => setState(() => _selectedGym = value),
             ),
             const SizedBox(height: 16),
             if (_errorMessage != null)
