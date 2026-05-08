@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/leaderboard_service.dart';
 import '../services/firestore_service.dart';
+import '../main.dart';
 
 class LeaderboardScreen extends StatefulWidget {
   const LeaderboardScreen({super.key});
@@ -213,7 +214,10 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
   Widget _buildEntryRow(LeaderboardEntry entry, int rank) {
     final isCurrentUser = entry.uid == _uid;
     final name = entry.isAnonymous ? 'Anonymous' : entry.displayName;
-    final e1rm = entry.bestLifts[_selectedExercise]!;
+    final e1rmKg = entry.bestLifts[_selectedExercise]!;
+    final isLbs = weightUnitNotifier.value == 'lbs';
+    final displayE1rm = isLbs ? e1rmKg * 2.20462 : e1rmKg;
+    final unit = isLbs ? 'lbs' : 'kg';
 
     // medal colours for top 3
     final rankColor = switch (rank) {
@@ -262,7 +266,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
               )
             : null,
         trailing: Text(
-          '${e1rm.toStringAsFixed(1)} kg',
+          '${displayE1rm.toStringAsFixed(1)} $unit',
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
         ),
       ),

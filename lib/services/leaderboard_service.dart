@@ -109,4 +109,15 @@ class LeaderboardService {
   Future<void> setAnonymous(String uid, String gymId, bool isAnonymous) async {
     await _leaderboardRef(gymId).doc(uid).update({'isAnonymous': isAnonymous});
   }
+
+  // updates the display name on any existing leaderboard entry for the user.
+  // called when the user saves a new display name in their profile.
+  // no-ops silently if the document doesn't exist yet (user has never saved a workout).
+  Future<void> updateDisplayName(
+      String uid, String gymId, String displayName) async {
+    final docRef = _leaderboardRef(gymId).doc(uid);
+    final snapshot = await docRef.get();
+    if (!snapshot.exists) return;
+    await docRef.update({'displayName': displayName});
+  }
 }
