@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/template_model.dart';
 import '../services/template_service.dart';
@@ -19,7 +19,7 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
   List<TemplateModel> _templates = [];
   bool _loading = true;
 
-  // editor state — active when the user is creating or editing a template
+  // editor state - active when the user is creating or editing a template
   bool _showEditor = false;
   String? _editingId; // null when creating a new template
   final _nameController = TextEditingController();

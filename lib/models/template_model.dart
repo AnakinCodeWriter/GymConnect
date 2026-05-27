@@ -1,9 +1,9 @@
-// TemplateSet, TemplateExercise, and TemplateModel follow the same
+﻿// TemplateSet, TemplateExercise, and TemplateModel follow the same
 // toMap/fromMap pattern as workout_model.dart.
 
 class TemplateSet {
   final int reps;
-  final double? weight; // optional — templates can be defined without weights
+  final double? weight; // optional - templates can be defined without weights
 
   TemplateSet({required this.reps, this.weight});
 
@@ -40,7 +40,7 @@ class TemplateExercise {
 }
 
 class TemplateModel {
-  final String id; // Firestore document ID — not stored inside the document
+  final String id; // Firestore document ID - not stored inside the document
   final String name;
   final List<TemplateExercise> exercises;
 

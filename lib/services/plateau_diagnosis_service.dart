@@ -1,4 +1,4 @@
-import '../models/workout_model.dart';
+﻿import '../models/workout_model.dart';
 
 enum DiagnosisType {
   frequencyDrop,
@@ -19,17 +19,12 @@ class PlateauDiagnosis {
   });
 }
 
-/// Rule-based root-cause analysis for a plateau or regression on a single exercise.
-///
-/// Each rule computes a confidence score (0–1). The highest-confidence rule
-/// that fires is returned. Returns null if no rule fires, or if there is not
-/// enough data to draw a conclusion.
 class PlateauDiagnosisService {
   // workouts must be sorted newest-first (as returned by WorkoutService).
   static PlateauDiagnosis? analyse(
       List<WorkoutModel> workouts, String exerciseName) {
     // Build a (date, workingSets) list for this exercise, newest first.
-    // Warm-up sets are excluded — they don't reflect working capacity.
+    // Warm-up sets are excluded - they don't reflect working capacity.
     final sessions = <(DateTime, List<WorkoutSet>)>[];
     for (final w in workouts) {
       for (final ex in w.exercises) {
@@ -65,9 +60,7 @@ class PlateauDiagnosisService {
     return candidates.first.$2;
   }
 
-  // ── Rule 1 ─────────────────────────────────────────────────────────────────
-  // Frequency drop: sessions in the last 28 days are significantly fewer
-  // than in the prior 28-day window.
+  // Rule 1 - frequency drop: sessions in the last 28 days vs the prior 28.
   static (double, PlateauDiagnosis)? _checkFrequencyDrop(
       List<(DateTime, List<WorkoutSet>)> sessions) {
     final now = DateTime.now();
@@ -100,15 +93,13 @@ class PlateauDiagnosisService {
         title: 'Training frequency has dropped',
         message: 'You\'ve hit this exercise $recent time${recent == 1 ? '' : 's'} '
             'in the last 4 weeks, down from $prior the previous 4 weeks. '
-            'Plateaus often follow a dip in consistency — try aiming for '
+            'Plateaus often follow a dip in consistency - try aiming for '
             '$target session${target == 1 ? '' : 's'} per week to rebuild momentum.',
       ),
     );
   }
 
-  // ── Rule 2 ─────────────────────────────────────────────────────────────────
-  // Rep monotony: the modal rep count has been identical across the last
-  // 5+ sessions, indicating the user has not varied their rep range.
+  // Rule 2 - rep monotony: same rep count in 5+ of the last 6 sessions.
   static (double, PlateauDiagnosis)? _checkRepMonotony(
       List<(DateTime, List<WorkoutSet>)> sessions) {
     final recent = sessions.take(6).toList();
@@ -124,10 +115,7 @@ class PlateauDiagnosisService {
 
     final modals = recent.map((s) => modalReps(s.$2)).toList();
 
-    // Find the rep count that appears most often across all recent sessions,
-    // not just the most recent one. Anchoring to modals.first was a bug:
-    // one outlier session at a different rep count would suppress the rule
-    // even if the other five sessions were all identical.
+    // Find the dominant rep count across all recent sessions.
     final modalCounts = <int, int>{};
     for (final r in modals) {
       modalCounts[r] = (modalCounts[r] ?? 0) + 1;
@@ -148,14 +136,12 @@ class PlateauDiagnosisService {
         message: 'Your last ${recent.length} sessions all used $dominant reps. '
             'Staying in the same rep range for too long is a common plateau trigger. '
             'Try a week at $lower reps with heavier weight, or $higher reps '
-            'at a lighter load — varying the stimulus often restarts progress.',
+            'at a lighter load - varying the stimulus often restarts progress.',
       ),
     );
   }
 
-  // ── Rule 3 ─────────────────────────────────────────────────────────────────
-  // Continuous escalation: weight increased in every single recent session
-  // without ever repeating a load — a sign of progression outpacing adaptation.
+  // Rule 3 - continuous escalation: weight strictly increased every session.
   static (double, PlateauDiagnosis)? _checkContinuousEscalation(
       List<(DateTime, List<WorkoutSet>)> sessions) {
     final recent = sessions.take(6).toList();
@@ -167,7 +153,7 @@ class PlateauDiagnosisService {
         .map((s) => s.$2.map((w) => w.weight).reduce((a, b) => a > b ? a : b))
         .toList()
         .reversed
-        .toList(); // oldest → newest
+        .toList(); // oldest -> newest
 
     for (int i = 1; i < maxWeights.length; i++) {
       if (maxWeights[i] <= maxWeights[i - 1]) return null;
@@ -179,16 +165,14 @@ class PlateauDiagnosisService {
         type: DiagnosisType.continuousEscalation,
         title: 'Weight added every session',
         message: 'You\'ve added weight in each of your last ${recent.length} sessions '
-            'without repeating a load. Strength needs time to consolidate — '
+            'without repeating a load. Strength needs time to consolidate - '
             'try holding at your current weight for one more session, '
             'focusing on quality reps before pushing the number higher.',
       ),
     );
   }
 
-  // ── Rule 4 ─────────────────────────────────────────────────────────────────
-  // No recovery week: across the last 8 sessions no single session had a
-  // significantly lower max weight, suggesting the user has never taken a deload.
+  // Rule 4 - no recovery week: no session in the last 8 fell below 70% of peak weight.
   static (double, PlateauDiagnosis)? _checkNoRecoveryWeek(
       List<(DateTime, List<WorkoutSet>)> sessions) {
     if (sessions.length < 6) return null;
@@ -214,8 +198,8 @@ class PlateauDiagnosisService {
         type: DiagnosisType.noRecoveryWeek,
         title: 'No easy week in $weeks week${weeks == 1 ? '' : 's'}',
         message: 'You\'ve trained at high intensity for $weeks weeks without a '
-            'lighter session. A planned deload — dropping to around 60–70% of '
-            'your usual weight for one session — lets your body recover and '
+            'lighter session. A planned deload - dropping to around 60–70% of '
+            'your usual weight for one session - lets your body recover and '
             'often triggers a breakthrough the week after.',
       ),
     );

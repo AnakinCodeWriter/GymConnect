@@ -1,10 +1,10 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+﻿import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/template_model.dart';
 
 class TemplateService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // scoped reference to the user's templates subcollection —
+  // scoped reference to the user's templates subcollection -
   // same pattern as WorkoutService._workoutsRef
   CollectionReference _ref(String uid) =>
       _db.collection('users').doc(uid).collection('templates');

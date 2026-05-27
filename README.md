@@ -1,48 +1,37 @@
 # GymConnect
 
-A Flutter Android application for tracking gym workouts and monitoring strength progress over time.
+A Flutter Android app for logging gym workouts and tracking strength progress. Built as my final year BSc Computer Science dissertation at Bournemouth University.
 
-Built as a final year BSc Computer Science project at Bournemouth University.
+## What it does
 
-## Tech Stack
+- Log workouts with exercises, sets, reps and weight
+- Track estimated 1RM progress over time with a chart
+- Detects plateaus using weighted least squares regression
+- Suggests possible causes when a plateau is detected
+- Tracks how you felt each session and spots patterns
+- Gym leaderboard to compare best lifts with others at the same gym
+- Save custom workout templates
+- Beginner starter plans
 
-- Flutter (Dart)
-- Firebase Authentication
+## Built with
+
+- Flutter / Dart
+- Firebase Auth
 - Cloud Firestore
 - fl_chart
 
-## Project Structure
+## Running the app
+
+1. Run `flutter pub get`
+2. Connect an Android emulator or device
+3. Run `flutter run`
+
+The Firebase config (`firebase_options.dart` and `google-services.json`) is included in this submission so the app should run against the existing project without any extra setup.
+
+## Running the tests
 
 ```
-lib/
-├── main.dart
-├── firebase_options.dart
-├── models/
-│   ├── user_model.dart
-│   └── workout_model.dart
-├── screens/
-│   ├── login_screen.dart
-│   ├── register_screen.dart
-│   ├── onboarding_screen.dart
-│   ├── home_screen.dart
-│   ├── log_workout_screen.dart
-│   └── progress_screen.dart
-├── services/
-│   ├── auth_service.dart
-│   ├── firestore_service.dart
-│   ├── workout_service.dart
-│   └── plateau_detector.dart
-└── widgets/
-    └── auth_text_field.dart
+flutter test
 ```
 
-## Getting Started
-
-1. Clone the repository
-2. Run `flutter pub get` to install dependencies
-3. Connect your own Firebase project:
-   - Add your `google-services.json` to `android/app/`
-   - Run `flutterfire configure` to regenerate `firebase_options.dart` (excluded from this repo for security)
-4. Run on an Android device or emulator with `flutter run`
-
-> **Note:** `firebase_options.dart` and `google-services.json` are excluded from version control as they contain Firebase API keys. You must generate these yourself using the FlutterFire CLI before running the app.
+There are 43 unit tests covering the plateau detector, plateau diagnosis, feel analysis and the Epley formula.

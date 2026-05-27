@@ -1,4 +1,4 @@
-import '../models/workout_model.dart';
+﻿import '../models/workout_model.dart';
 import 'plateau_detector.dart';
 
 enum RecommendationType { startBeginner, balanceWorkout, plateauAdvice, keepGoing }
@@ -186,7 +186,7 @@ class RecommendationService {
       );
     }
 
-    // Mixed or unclear — suggest full body
+    // Mixed or unclear - suggest full body
     return const NextWorkoutSuggestion(
       title: 'Full Body Workout',
       message: 'Your last session was mixed. A full body workout is a solid next choice.',

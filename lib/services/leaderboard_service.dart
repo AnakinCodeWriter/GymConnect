@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+﻿import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/workout_model.dart';
 
 // represents one user's entry on the gym leaderboard.
@@ -35,12 +35,7 @@ class LeaderboardService {
   CollectionReference _leaderboardRef(String gymId) =>
       _db.collection('gyms').doc(gymId).collection('leaderboard');
 
-  // called after a workout is saved. computes the best e1RM per exercise in
-  // the new workout and updates the leaderboard only where the new value is
-  // higher than what was previously stored.
-  //
-  // uses merge: true so the document is created automatically on first save,
-  // and existing exercises not in this workout are left unchanged.
+  // updates the leaderboard with the best e1RM per exercise, only where improved.
   Future<void> updateUserBestLifts(
     String uid,
     String gymId,

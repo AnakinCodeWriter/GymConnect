@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 // represents a single exercise within a plan, storing the name and sets/reps as a display string
 class _Exercise {
@@ -21,7 +21,7 @@ class _WorkoutPlan {
   });
 }
 
-// hardcoded beginner plans — no database needed, all data lives locally in this file
+// hardcoded beginner plans - no database needed, all data lives locally in this file
 const _plans = [
   _WorkoutPlan(
     title: 'Full Body Beginner',

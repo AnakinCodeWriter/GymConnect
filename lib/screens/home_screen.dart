@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
@@ -60,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
             profile?.personalRecords[profile.goalExercise] ?? 0;
       });
     } catch (_) {
-      // silently ignore load errors — the home screen remains usable
+      // silently ignore load errors - the home screen remains usable
       // and the user can still navigate or sign out
     }
   }

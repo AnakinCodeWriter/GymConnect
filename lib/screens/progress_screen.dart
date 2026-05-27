@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../models/workout_model.dart';
@@ -9,9 +9,9 @@ import '../services/plateau_diagnosis_service.dart';
 import '../utils/fitness_formulas.dart';
 import '../main.dart';
 
-// A flat record of one set from one exercise on one date — used for display.
+// A flat record of one set from one exercise on one date - used for display.
 class _SetRecord {
-  final String workoutId;   // Firestore document ID — needed for deletion
+  final String workoutId;   // Firestore document ID - needed for deletion
   final int setIndex;       // index of this set within the exercise's set list
   final DateTime date;
   final String exerciseName;
@@ -143,9 +143,6 @@ class _ProgressScreenState extends State<ProgressScreen> {
     _filterController.text = name;
   }
 
-  /// Returns one best-1RM value per training day for the currently selected
-  /// exercise, sorted oldest → newest.  Returns null if no exercise is
-  /// exactly selected.
   List<(DateTime, double)>? _getSessionData() {
     final query = _filterController.text.trim().toLowerCase();
     if (query.isEmpty) return null;
@@ -169,11 +166,49 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return byDate.entries
         .map((e) => (e.key, e.value))
         .toList()
-      ..sort((a, b) => a.$1.compareTo(b.$1)); // oldest → newest
+      ..sort((a, b) => a.$1.compareTo(b.$1)); // oldest -> newest
   }
 
   PlateauResult? _plateauResultForCurrentFilter() {
     final sessions = _getSessionData();
+    if (sessions == null) return null;
+    return PlateauDetector.analyse(sessions);
+  }
+
+  // Total working volume (kg) per calendar day for the selected exercise.
+  // Warm-up sets excluded - matches the same exclusion used for e1RM data.
+  List<(DateTime, double)>? _getSessionVolumeData() {
+    final query = _filterController.text.trim().toLowerCase();
+    if (query.isEmpty) return null;
+    final matchedName = _exerciseNames.cast<String?>().firstWhere(
+      (n) => n!.toLowerCase() == query,
+      orElse: () => null,
+    );
+    if (matchedName == null) return null;
+
+    final byDate = <DateTime, double>{};
+    for (final workout in _allWorkouts) {
+      for (final ex in workout.exercises) {
+        if (ex.name.trim().toLowerCase() == matchedName.toLowerCase()) {
+          final d = workout.date.toDate();
+          final day = DateTime(d.year, d.month, d.day);
+          double vol = 0;
+          for (final s in ex.sets) {
+            if (!s.isWarmup) vol += s.weight * s.reps;
+          }
+          if (vol > 0) byDate[day] = (byDate[day] ?? 0) + vol;
+          break;
+        }
+      }
+    }
+    return byDate.entries
+        .map((e) => (e.key, e.value))
+        .toList()
+      ..sort((a, b) => a.$1.compareTo(b.$1));
+  }
+
+  PlateauResult? _volumeResultForCurrentFilter() {
+    final sessions = _getSessionVolumeData();
     if (sessions == null) return null;
     return PlateauDetector.analyse(sessions);
   }
@@ -183,6 +218,11 @@ class _ProgressScreenState extends State<ProgressScreen> {
     if (result == null) return null;
     if (result.status != PlateauStatus.plateau &&
         result.status != PlateauStatus.regressing) {
+      return null;
+    }
+
+    // Volume is still rising - not a true plateau, suppress diagnosis.
+    if (_volumeResultForCurrentFilter()?.status == PlateauStatus.progressing) {
       return null;
     }
 
@@ -339,32 +379,45 @@ class _ProgressScreenState extends State<ProgressScreen> {
     final result = _plateauResultForCurrentFilter();
     if (result == null) return const SizedBox.shrink();
 
-    final (icon, label, sublabel, color) = switch (result.status) {
-      PlateauStatus.progressing => (
-          Icons.trending_up,
-          'Progressing',
-          'Your 1RM is trending up — keep it up!',
-          Colors.green,
-        ),
-      PlateauStatus.plateau => (
-          Icons.trending_flat,
-          'Plateau',
-          'Your 1RM has been flat lately. Try adding weight or varying reps.',
-          Colors.orange,
-        ),
-      PlateauStatus.regressing => (
-          Icons.trending_down,
-          'Regressing',
-          'Your 1RM is trending down. Check recovery, form, or volume.',
-          Colors.red,
-        ),
-      PlateauStatus.insufficientData => (
-          Icons.hourglass_empty,
-          'Not enough data',
-          'Log at least 3 sessions for this exercise to see a trend.',
-          Colors.grey,
-        ),
-    };
+    final volumeResult = _volumeResultForCurrentFilter();
+    final volumeProgressing =
+        volumeResult?.status == PlateauStatus.progressing;
+
+    // Determine display values based on combined e1RM + volume classification.
+    final IconData icon;
+    final String label;
+    final String sublabel;
+    final Color color;
+
+    if (result.status == PlateauStatus.insufficientData) {
+      icon = Icons.hourglass_empty;
+      label = 'Not enough data';
+      sublabel = 'Log at least 5 sessions for this exercise to see a trend.';
+      color = Colors.grey;
+    } else if (result.status == PlateauStatus.progressing) {
+      icon = Icons.trending_up;
+      label = 'Progressing';
+      sublabel = 'Your 1RM is trending up - keep it up!';
+      color = Colors.green;
+    } else if (volumeProgressing) {
+      // e1RM is flat/declining but volume is rising - not a true plateau.
+      icon = Icons.show_chart;
+      label = 'Volume Progressing';
+      sublabel =
+          'Your peak weight is flat but total volume is rising - strength gains often follow.';
+      color = Colors.teal;
+    } else if (result.status == PlateauStatus.plateau) {
+      icon = Icons.trending_flat;
+      label = 'Plateau';
+      sublabel =
+          'Your 1RM has been flat lately. Try adding weight or varying reps.';
+      color = Colors.orange;
+    } else {
+      icon = Icons.trending_down;
+      label = 'Regressing';
+      sublabel = 'Your 1RM is trending down. Check recovery, form, or volume.';
+      color = Colors.red;
+    }
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -393,21 +446,27 @@ class _ProgressScreenState extends State<ProgressScreen> {
                 const SizedBox(height: 2),
                 Text(
                   sublabel,
-                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurface),
                 ),
-                if (result.status != PlateauStatus.insufficientData)
+                // Show e1RM weekly trend for all statuses except
+                // insufficientData and volumeProgressing (volume is
+                // in different units so a single slope line would confuse).
+                if (result.status != PlateauStatus.insufficientData &&
+                    !volumeProgressing)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Builder(builder: (_) {
                       final isLbs = weightUnitNotifier.value == 'lbs';
-                      final slope = isLbs
-                          ? result.slope * 2.20462
-                          : result.slope;
+                      final slopePerWeek = isLbs
+                          ? result.slope * 2.20462 * 7
+                          : result.slope * 7;
                       final u = isLbs ? 'lbs' : 'kg';
                       return Text(
-                        'Slope: ${slope >= 0 ? '+' : ''}${slope.toStringAsFixed(2)} $u/session',
-                        style: TextStyle(
-                            fontSize: 11, color: Colors.grey.shade600),
+                        'Trend: ${slopePerWeek >= 0 ? '+' : ''}${slopePerWeek.toStringAsFixed(2)} $u/week',
+                        style:
+                            TextStyle(fontSize: 11, color: Colors.grey.shade600),
                       );
                     }),
                   ),

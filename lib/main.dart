@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,7 +8,7 @@ import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/firestore_service.dart';
 
-// Global notifier — any screen can read or toggle the theme without prop drilling
+// Global notifier - any screen can read or toggle the theme without prop drilling
 final themeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
 
 // Global notifier for weight unit preference ('kg' or 'lbs')
@@ -101,11 +101,13 @@ class ProfileChecker extends StatelessWidget {
     return FutureBuilder<bool>(
       future: FirestoreService().userProfileExists(uid),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting ||
-            snapshot.hasError) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
+        }
+        if (snapshot.hasError) {
+          return const OnboardingScreen();
         }
         if (snapshot.data == true) {
           return const HomeScreen();

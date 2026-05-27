@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+﻿import 'package:cloud_firestore/cloud_firestore.dart';
 
 class WorkoutSet {
   final double weight;
@@ -44,7 +44,7 @@ class WorkoutModel {
   final String name;
   final Timestamp date;
   final List<ExerciseEntry> exercises;
-  final int? feelRating; // 1–5, null if the user did not rate this session
+  final int? feelRating; // 1-5, null if the user did not rate this session
 
   WorkoutModel({
     required this.id,

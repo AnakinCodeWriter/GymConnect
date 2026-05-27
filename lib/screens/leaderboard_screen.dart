@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/leaderboard_service.dart';
 import '../services/firestore_service.dart';
@@ -109,8 +109,8 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
               _isAnonymous ? Icons.visibility_off : Icons.visibility,
             ),
             tooltip: _isAnonymous
-                ? 'You are anonymous — tap to show your name'
-                : 'You are visible — tap to go anonymous',
+                ? 'You are anonymous - tap to show your name'
+                : 'You are visible - tap to go anonymous',
             onPressed: _loading ? null : _toggleAnonymous,
           ),
         ],
@@ -259,7 +259,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         ),
         subtitle: isCurrentUser
             ? Text(
-                entry.isAnonymous ? '(you — anonymous)' : '(you)',
+                entry.isAnonymous ? '(you - anonymous)' : '(you)',
                 style: TextStyle(
                     fontSize: 11,
                     color: Theme.of(context).colorScheme.primary),

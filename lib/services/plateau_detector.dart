@@ -1,43 +1,26 @@
-library;
-
-import 'dart:math';
+﻿import 'dart:math';
 
 enum PlateauStatus { progressing, plateau, regressing, insufficientData }
 
 class PlateauResult {
   final PlateauStatus status;
 
-  /// slope of the weighted regression line in kg per session.
-  /// positive = progressing, negative = regressing, near-zero = plateau.
-  final double slope;
+  final double slope; // kg per day
 
   const PlateauResult({required this.status, required this.slope});
 }
 
 class PlateauDetector {
-  /// minimum sessions before analysis runs. 5 gives the regression
-  /// enough data points to be statistically meaningful.
   static const int minSessions = 5;
 
-  // Thresholds are fractions of the weighted mean e1RM (0.25% per session).
-  // Using a relative value means the same rule works for a lifter whose
-  // best squat is 60 kg and one whose best is 200 kg.
-  static const double progressThreshold = 0.0025;
-  static const double regressThreshold = -0.0025;
+  // Thresholds are fractions of the weighted mean e1RM per day (0.1%/day, ~0.7%/week).
+  // Scale-invariant: same sensitivity for a 60 kg lifter and a 200 kg lifter.
+  static const double progressThreshold = 0.001;
+  static const double regressThreshold = -0.001;
 
-  /// exponential decay factor applied per session.
-  /// 0.85 means each session further back in time is 15% less influential,
-  /// so a recent stall outweighs older progress (and vice-versa).
   static const double _decay = 0.85;
 
-  /// Analyse a list of (date, best-e1RM) pairs for a single exercise using
-  /// Weighted Least Squares regression with exponential recency decay.
-  ///
-  /// OLS treats a session from six months ago identically to last Tuesday.
-  /// WLS corrects this: the most recent session gets weight 1.0, each
-  /// earlier session is multiplied by [_decay], so recent trends dominate.
-  ///
-  /// The list does not need to be sorted beforehand.
+  // WLS regression with exponential recency decay. Input does not need to be sorted.
   static PlateauResult analyse(List<(DateTime, double)> sessions) {
     if (sessions.length < minSessions) {
       return const PlateauResult(
@@ -54,7 +37,7 @@ class PlateauDetector {
 
     for (int i = 0; i < n; i++) {
       final w = pow(_decay, n - 1 - i).toDouble();
-      final x = i.toDouble();
+      final x = sorted[i].$1.difference(sorted.first.$1).inDays.toDouble();
       final y = sorted[i].$2;
       sumW += w;
       sumWX += w * x;
@@ -71,8 +54,7 @@ class PlateauDetector {
 
     final slope = (sumW * sumWXY - sumWX * sumWY) / denominator;
 
-    // Normalise the slope by the weighted mean e1RM so the threshold is
-    // scale-invariant: 0.0025 means "0.25% change per session".
+    // Normalise by the weighted mean e1RM so the threshold is scale-invariant.
     final weightedMeanY = sumWY / sumW;
     final normalizedSlope =
         weightedMeanY > 0 ? slope / weightedMeanY : slope;

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/workout_model.dart';
@@ -25,7 +25,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   final LeaderboardService _leaderboardService = LeaderboardService();
 
   final List<_ExerciseData> _exercises = [];
-  // full workout history, sorted newest first — used for repeat and suggestions
+  // full workout history, sorted newest first - used for repeat and suggestions
   List<WorkoutModel> _workouts = [];
   // saved templates for this user, used to populate the Load Template dialog
   List<TemplateModel> _templates = [];
@@ -67,7 +67,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
             _workoutService.getLastSessionSetsByExercise(workouts);
       });
     } catch (_) {
-      // silently ignore — the screen remains usable with empty state
+      // silently ignore - the screen remains usable with empty state
     }
   }
 
@@ -159,7 +159,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
             ex.sets.add(_SetData.fromWorkoutSet(set));
           }
         } else {
-          // no history yet — fall back to the template's placeholder values
+          // no history yet - fall back to the template's placeholder values
           for (final set in entry.sets) {
             ex.sets.add(_SetData.fromTemplateSet(set));
           }
@@ -202,7 +202,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
       final existing = _exercises.indexWhere(
           (e) => e.name.trim().toLowerCase() == name.trim().toLowerCase());
       if (existing != -1) {
-        // exercise card already present — just append a set
+        // exercise card already present - just append a set
         final sets = _exercises[existing].sets;
         if (sets.isNotEmpty) {
           final prev = sets.last;
@@ -215,7 +215,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
         }
         return;
       }
-      // new exercise — create a card and prefill the first set from history
+      // new exercise - create a card and prefill the first set from history
       final ex = _ExerciseData()..name = name;
       final lastSet = _lastSets[name];
       if (lastSet != null) {
@@ -305,7 +305,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
       }
     }
 
-    // collect feel rating before showing the saving spinner —
+    // collect feel rating before showing the saving spinner -
     // the sheet must appear while the screen is still interactive.
     final feelRating = await _showFeelRatingSheet();
     if (!mounted) return; // user may have navigated away during the sheet
@@ -347,8 +347,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
 
       await _workoutService.saveWorkout(uid, workout);
 
-      // ── PR detection ───────────────────────────────────────────────────
-      // Warm-up sets are excluded — only working sets count toward a PR.
+      // PR detection - warm-up sets excluded.
       final newPRs = <String>[];
       try {
         final profile = await _firestoreService.getUserProfile(uid);
@@ -382,10 +381,8 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
               .catchError((_) {});
         }
       } catch (_) {
-        // PR / leaderboard failures do not block navigation — workout is saved
+        // PR / leaderboard failures do not block navigation - workout is saved
       }
-      // ───────────────────────────────────────────────────────────────────
-
       // Show total volume summary before navigating away.
       if (mounted && totalVolumeKg > 0) {
         final displayVolume =
@@ -448,7 +445,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
   Future<int?> _showFeelRatingSheet() {
     return showModalBottomSheet<int>(
       context: context,
-      // isDismissible defaults to true — tapping outside returns null
+      // isDismissible defaults to true - tapping outside returns null
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -533,13 +530,13 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(_error!, style: const TextStyle(color: Colors.red)),
             ),
-          // chips row — only rendered once history has been loaded
+          // chips row - only rendered once history has been loaded
           if (_recentExercises.isNotEmpty)
             _RecentExercisesRow(
               names: _recentExercises,
               onTap: _addExerciseWithName,
             ),
-          // repeat button — only shown when the user has at least one previous workout
+          // repeat button - only shown when the user has at least one previous workout
           if (_workouts.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -552,7 +549,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
                 ),
               ),
             ),
-          // load template button — only shown when saved templates exist
+          // load template button - only shown when saved templates exist
           if (_templates.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -673,10 +670,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
                 ),
               ],
             ),
-            // Progressive overload hint — adapts to whether the last session
-            // was strong (reps held up) or challenging (reps dropped off).
-            // Strong session  → suggest adding weight today (green).
-            // Challenging     → suggest consolidating before progressing (amber).
+            // Progressive overload hint based on last session performance.
             Builder(builder: (_) {
               final name = ex.name.trim();
               final sessionSets = _lastSessionSets[name];
@@ -700,10 +694,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
               final firstReps = sessionSets.first.reps;
               final lastReps = sessionSets.last.reps;
 
-              // Strong = reps held up across sets.
-              // Single-set: always encourage progression — one working set is
-              // always intentional, there is no drop-off to measure.
-              // Multi-set: last set ≥ 75% of first set (standard drop-off tolerance).
+              // Multi-set: strong if last set is >= 75% of first set reps.
               final bool strong = sessionSets.length == 1
                   ? true
                   : lastReps >= (firstReps * 0.75).floor();
@@ -717,14 +708,14 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
               final Color hintColor;
               if (strong) {
                 message =
-                    'Last: $wStr$unit × $firstReps reps — solid session, try $suggestedWStr$unit today';
+                    'Last: $wStr$unit × $firstReps reps - solid session, try $suggestedWStr$unit today';
                 hintColor = Colors.green.shade600;
               } else {
                 final repStr = sessionSets.length > 1
                     ? '$firstReps→$lastReps'
                     : '$lastReps';
                 message =
-                    'Last: $wStr$unit × $repStr reps — build to $firstReps consistent reps at $wStr$unit first';
+                    'Last: $wStr$unit × $repStr reps - build to $firstReps consistent reps at $wStr$unit first';
                 hintColor = Colors.orange.shade700;
               }
 
@@ -763,7 +754,7 @@ class _LogWorkoutScreenState extends State<LogWorkoutScreen> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
-          // Tappable set number — tap to toggle warm-up flag.
+          // Tappable set number - tap to toggle warm-up flag.
           // Only one warm-up is allowed per exercise; toggling a second set
           // automatically clears the previous one.
           Tooltip(
@@ -910,7 +901,7 @@ class _SetData {
         repsController = TextEditingController(text: reps);
 
   // Creates a _SetData pre-filled from a previously logged set.
-  // Converts kg→display unit; preserves the warm-up flag.
+  // Converts kg->display unit; preserves the warm-up flag.
   factory _SetData.fromWorkoutSet(WorkoutSet set) {
     final isLbs = weightUnitNotifier.value == 'lbs';
     final w = isLbs ? set.weight * 2.20462 : set.weight;
@@ -979,11 +970,8 @@ class _RecentExercisesRow extends StatelessWidget {
   }
 }
 
-// ── feel rating sheet ─────────────────────────────────────────────────────────
+// feel rating sheet
 
-/// Bottom sheet shown after a workout is saved.
-/// Tapping a star pops with the selected value (1–5).
-/// Tapping the barrier dismisses and returns null (no rating stored).
 class _FeelRatingSheet extends StatefulWidget {
   const _FeelRatingSheet();
 

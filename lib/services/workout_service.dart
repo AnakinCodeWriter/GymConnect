@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+﻿import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/workout_model.dart';
 
 class WorkoutService {
@@ -29,7 +29,7 @@ class WorkoutService {
     return extractExerciseNames(workouts);
   }
 
-  // Synchronous version of getRecentExerciseNames — takes an already-loaded
+  // Synchronous version of getRecentExerciseNames - takes an already-loaded
   // workout list so the caller can avoid a second Firestore round-trip.
   List<String> extractExerciseNames(List<WorkoutModel> workouts) {
     final counts = <String, int>{};
@@ -101,7 +101,7 @@ class WorkoutService {
     }
   }
 
-  // Sums weight × reps across all working (non-warm-up) sets, in kg.
+  // Sums weight * reps across all working (non-warm-up) sets, in kg.
   double getTotalVolumeLiftedKg(List<WorkoutModel> workouts) {
     double total = 0;
     for (final w in workouts) {
