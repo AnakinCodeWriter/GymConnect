@@ -1,4 +1,4 @@
-﻿import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:gymconnect/services/plateau_detector.dart';
 
 // Builds a list of (date, e1RM) pairs spaced evenly apart.
@@ -18,13 +18,17 @@ void main() {
   group('PlateauDetector.analyse', () {
     group('Minimum session requirement', () {
       test('fewer than 5 sessions returns insufficientData', () {
-        final result = PlateauDetector.analyse(makeSessions([100, 105, 110, 115]));
+        final result = PlateauDetector.analyse(
+          makeSessions([100, 105, 110, 115]),
+        );
         expect(result.status, PlateauStatus.insufficientData);
         expect(result.slope, 0);
       });
 
       test('exactly 5 sessions does not return insufficientData', () {
-        final result = PlateauDetector.analyse(makeSessions([100, 102, 104, 106, 108]));
+        final result = PlateauDetector.analyse(
+          makeSessions([100, 102, 104, 106, 108]),
+        );
         expect(result.status, isNot(PlateauStatus.insufficientData));
       });
     });

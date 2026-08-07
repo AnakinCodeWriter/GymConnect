@@ -1,4 +1,4 @@
-﻿import '../models/workout_model.dart';
+import '../models/workout_model.dart';
 import '../utils/fitness_formulas.dart';
 
 enum FeelInsightType { lowStreakWarning, performanceCorrelation, bestDayOfWeek }
@@ -46,7 +46,8 @@ class FeelAnalysisService {
 
   // Needs >= 3 workouts in each of high (4-5) and low (1-2) buckets. Rating 3 excluded.
   static FeelInsight? _checkPerformanceCorrelation(
-      List<WorkoutModel> workouts) {
+    List<WorkoutModel> workouts,
+  ) {
     final highE1RMs = <double>[];
     final lowE1RMs = <double>[];
 
@@ -83,7 +84,7 @@ class FeelAnalysisService {
     double best = 0;
     for (final ex in w.exercises) {
       for (final s in ex.sets) {
-        if (s.isWarmup) continue;
+        if (!isEligibleForStrengthAnalytics(s)) continue;
         final e1rm = estimatedOneRepMax(s.weight, s.reps);
         if (e1rm > best) best = e1rm;
       }
@@ -113,11 +114,13 @@ class FeelAnalysisService {
     return FeelInsight(
       type: FeelInsightType.bestDayOfWeek,
       title: 'Peak training day',
-      message: 'You consistently feel best training on ${_weekdayName(best.key)}.',
+      message:
+          'You consistently feel best training on ${_weekdayName(best.key)}.',
     );
   }
 
-  static String _weekdayName(int weekday) => const {
+  static String _weekdayName(int weekday) =>
+      const {
         1: 'Monday',
         2: 'Tuesday',
         3: 'Wednesday',

@@ -1,4 +1,4 @@
-﻿import '../models/workout_model.dart';
+import '../models/workout_model.dart';
 
 enum DiagnosisType {
   frequencyDrop,
@@ -21,15 +21,19 @@ class PlateauDiagnosis {
 
 class PlateauDiagnosisService {
   // workouts must be sorted newest-first (as returned by WorkoutService).
+  // referenceDate anchors the time-window rules (frequency drop) so results
+  // are deterministic; callers at the UI boundary pass DateTime.now().
   static PlateauDiagnosis? analyse(
-      List<WorkoutModel> workouts, String exerciseName) {
+    List<WorkoutModel> workouts,
+    String exerciseName, {
+    required DateTime referenceDate,
+  }) {
     // Build a (date, workingSets) list for this exercise, newest first.
     // Warm-up sets are excluded - they don't reflect working capacity.
     final sessions = <(DateTime, List<WorkoutSet>)>[];
     for (final w in workouts) {
       for (final ex in w.exercises) {
-        if (ex.name.trim().toLowerCase() ==
-            exerciseName.trim().toLowerCase()) {
+        if (ex.name.trim().toLowerCase() == exerciseName.trim().toLowerCase()) {
           final working = ex.sets.where((s) => !s.isWarmup).toList();
           if (working.isNotEmpty) {
             sessions.add((w.date.toDate(), working));
@@ -43,7 +47,7 @@ class PlateauDiagnosisService {
 
     final candidates = <(double, PlateauDiagnosis)>[];
 
-    final freq = _checkFrequencyDrop(sessions);
+    final freq = _checkFrequencyDrop(sessions, referenceDate);
     if (freq != null) candidates.add(freq);
 
     final rep = _checkRepMonotony(sessions);
@@ -61,16 +65,21 @@ class PlateauDiagnosisService {
   }
 
   // Rule 1 - frequency drop: sessions in the last 28 days vs the prior 28.
+  // A session exactly 28 days before [now] falls in the prior window
+  // (isAfter is strict).
   static (double, PlateauDiagnosis)? _checkFrequencyDrop(
-      List<(DateTime, List<WorkoutSet>)> sessions) {
-    final now = DateTime.now();
+    List<(DateTime, List<WorkoutSet>)> sessions,
+    DateTime now,
+  ) {
     final recent = sessions
         .where((s) => s.$1.isAfter(now.subtract(const Duration(days: 28))))
         .length;
     final prior = sessions
-        .where((s) =>
-            s.$1.isAfter(now.subtract(const Duration(days: 56))) &&
-            !s.$1.isAfter(now.subtract(const Duration(days: 28))))
+        .where(
+          (s) =>
+              s.$1.isAfter(now.subtract(const Duration(days: 56))) &&
+              !s.$1.isAfter(now.subtract(const Duration(days: 28))),
+        )
         .length;
 
     if (prior < 2) return null;
@@ -91,7 +100,8 @@ class PlateauDiagnosisService {
       PlateauDiagnosis(
         type: DiagnosisType.frequencyDrop,
         title: 'Training frequency has dropped',
-        message: 'You\'ve hit this exercise $recent time${recent == 1 ? '' : 's'} '
+        message:
+            'You\'ve hit this exercise $recent time${recent == 1 ? '' : 's'} '
             'in the last 4 weeks, down from $prior the previous 4 weeks. '
             'Plateaus often follow a dip in consistency - try aiming for '
             '$target session${target == 1 ? '' : 's'} per week to rebuild momentum.',
@@ -101,7 +111,8 @@ class PlateauDiagnosisService {
 
   // Rule 2 - rep monotony: same rep count in 5+ of the last 6 sessions.
   static (double, PlateauDiagnosis)? _checkRepMonotony(
-      List<(DateTime, List<WorkoutSet>)> sessions) {
+    List<(DateTime, List<WorkoutSet>)> sessions,
+  ) {
     final recent = sessions.take(6).toList();
     if (recent.length < 5) return null;
 
@@ -120,8 +131,9 @@ class PlateauDiagnosisService {
     for (final r in modals) {
       modalCounts[r] = (modalCounts[r] ?? 0) + 1;
     }
-    final dominant =
-        modalCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    final dominant = modalCounts.entries
+        .reduce((a, b) => a.value >= b.value ? a : b)
+        .key;
     final matchCount = modals.where((r) => r == dominant).length;
 
     if (matchCount < 5) return null;
@@ -133,7 +145,8 @@ class PlateauDiagnosisService {
       PlateauDiagnosis(
         type: DiagnosisType.repMonotony,
         title: 'Rep range hasn\'t varied',
-        message: 'Your last ${recent.length} sessions all used $dominant reps. '
+        message:
+            'Your last ${recent.length} sessions all used $dominant reps. '
             'Staying in the same rep range for too long is a common plateau trigger. '
             'Try a week at $lower reps with heavier weight, or $higher reps '
             'at a lighter load - varying the stimulus often restarts progress.',
@@ -143,7 +156,8 @@ class PlateauDiagnosisService {
 
   // Rule 3 - continuous escalation: weight strictly increased every session.
   static (double, PlateauDiagnosis)? _checkContinuousEscalation(
-      List<(DateTime, List<WorkoutSet>)> sessions) {
+    List<(DateTime, List<WorkoutSet>)> sessions,
+  ) {
     final recent = sessions.take(6).toList();
     if (recent.length < 5) return null;
 
@@ -164,7 +178,8 @@ class PlateauDiagnosisService {
       PlateauDiagnosis(
         type: DiagnosisType.continuousEscalation,
         title: 'Weight added every session',
-        message: 'You\'ve added weight in each of your last ${recent.length} sessions '
+        message:
+            'You\'ve added weight in each of your last ${recent.length} sessions '
             'without repeating a load. Strength needs time to consolidate - '
             'try holding at your current weight for one more session, '
             'focusing on quality reps before pushing the number higher.',
@@ -174,7 +189,8 @@ class PlateauDiagnosisService {
 
   // Rule 4 - no recovery week: no session in the last 8 fell below 70% of peak weight.
   static (double, PlateauDiagnosis)? _checkNoRecoveryWeek(
-      List<(DateTime, List<WorkoutSet>)> sessions) {
+    List<(DateTime, List<WorkoutSet>)> sessions,
+  ) {
     if (sessions.length < 6) return null;
 
     final recent = sessions.take(8).toList();
@@ -189,15 +205,15 @@ class PlateauDiagnosisService {
 
     final oldest = recent.last.$1;
     final newest = recent.first.$1;
-    final weeks =
-        (newest.difference(oldest).inDays / 7).round().clamp(1, 52);
+    final weeks = (newest.difference(oldest).inDays / 7).round().clamp(1, 52);
 
     return (
       0.70,
       PlateauDiagnosis(
         type: DiagnosisType.noRecoveryWeek,
         title: 'No easy week in $weeks week${weeks == 1 ? '' : 's'}',
-        message: 'You\'ve trained at high intensity for $weeks weeks without a '
+        message:
+            'You\'ve trained at high intensity for $weeks weeks without a '
             'lighter session. A planned deload - dropping to around 60–70% of '
             'your usual weight for one session - lets your body recover and '
             'often triggers a breakthrough the week after.',

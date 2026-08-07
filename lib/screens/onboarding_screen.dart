@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/firestore_service.dart';
 import '../models/user_model.dart';
 import '../widgets/auth_text_field.dart';
-import 'home_screen.dart';
+import 'app_shell.dart';
 
 // hardcoded list of gyms available for selection during onboarding.
 // using a fixed list ensures all users at the same gym share an identical
@@ -66,7 +66,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
+          MaterialPageRoute(builder: (_) => const AppShell()),
         );
       }
     } catch (e) {

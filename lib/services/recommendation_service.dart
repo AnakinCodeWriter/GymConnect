@@ -1,7 +1,13 @@
-﻿import '../models/workout_model.dart';
+import '../models/workout_model.dart';
+import '../utils/fitness_formulas.dart';
 import 'plateau_detector.dart';
 
-enum RecommendationType { startBeginner, balanceWorkout, plateauAdvice, keepGoing }
+enum RecommendationType {
+  startBeginner,
+  balanceWorkout,
+  plateauAdvice,
+  keepGoing,
+}
 
 class Recommendation {
   final RecommendationType type;
@@ -15,13 +21,15 @@ class Recommendation {
   });
 }
 
-class NextWorkoutSuggestion {
-  final String title;
-  final String message;
-
-  const NextWorkoutSuggestion({required this.title, required this.message});
-}
-
+/// Legacy rule-based recommendation helper from the dissertation build.
+/// [generate] still powers the dashboard's "Recommended Next Step" card,
+/// but only its balance/keep-going branches are rendered - the
+/// plateau/regression branch is superseded by the typed, evidence-backed
+/// training status (Phase 6) and the Weekly Review's suggested actions
+/// (Phase 8). `suggestNextWorkout` (an upper/lower/full-body keyword
+/// heuristic) was never rendered post-redesign and was deleted in Phase 11
+/// (backlog #14; docs/DECISIONS.md). Do not grow this class: new coaching
+/// advice belongs in the typed weekly-review suggestion model.
 class RecommendationService {
   // muscle groups used to detect whether training is balanced.
   // each entry maps a keyword (found in exercise names) to a group label.
@@ -71,7 +79,10 @@ class RecommendationService {
         exerciseCounts[name] = (exerciseCounts[name] ?? 0) + 1;
         exerciseSessions[name] ??= {};
         for (final set in exercise.sets) {
-          final e1rm = set.weight * (1 + set.reps / 30);
+          // canonical capped formula; warm-up and malformed sets don't
+          // drive strength comparisons (Phase 3, D3).
+          if (!isEligibleForStrengthAnalytics(set)) continue;
+          final e1rm = estimatedOneRepMax(set.weight, set.reps);
           final current = exerciseSessions[name]![day];
           if (current == null || e1rm > current) {
             exerciseSessions[name]![day] = e1rm;
@@ -86,8 +97,7 @@ class RecommendationService {
           .reduce((a, b) => a.value > b.value ? a : b)
           .key;
 
-      final sessions = exerciseSessions[topExercise]!
-          .entries
+      final sessions = exerciseSessions[topExercise]!.entries
           .map((e) => (e.key, e.value))
           .toList();
 
@@ -139,57 +149,8 @@ class RecommendationService {
     return const Recommendation(
       type: RecommendationType.keepGoing,
       title: 'Keep it up!',
-      message: 'Your training looks well-rounded. Keep logging your sessions to track your progress.',
-    );
-  }
-
-  // Suggests what muscle group to train next based on the most recent workout.
-  // Looks only at the last workout, not the full history.
-  NextWorkoutSuggestion suggestNextWorkout(List<WorkoutModel> workouts) {
-    if (workouts.isEmpty) {
-      return const NextWorkoutSuggestion(
-        title: 'Full Body Beginner Workout',
-        message: 'You have not logged any workouts yet. A full body session is a great place to start.',
-      );
-    }
-
-    // workouts are ordered newest first (see WorkoutService), so index 0 is most recent.
-    final lastWorkout = workouts.first;
-
-    // Count how many exercises in the last workout belong to upper vs lower body.
-    int upperCount = 0;
-    int lowerCount = 0;
-
-    const upperKeywords = ['bench', 'press', 'row', 'pull', 'lat', 'curl', 'shoulder', 'chest', 'tricep', 'bicep', 'back', 'push'];
-    const lowerKeywords = ['squat', 'leg', 'deadlift', 'lunge', 'calf'];
-
-    for (final exercise in lastWorkout.exercises) {
-      final name = exercise.name.toLowerCase();
-      if (upperKeywords.any((k) => name.contains(k))) {
-        upperCount++;
-      } else if (lowerKeywords.any((k) => name.contains(k))) {
-        lowerCount++;
-      }
-    }
-
-    if (upperCount > lowerCount) {
-      return const NextWorkoutSuggestion(
-        title: 'Lower Body Workout',
-        message: 'You recently focused on upper body, so training lower body next will help maintain balance.',
-      );
-    }
-
-    if (lowerCount > upperCount) {
-      return const NextWorkoutSuggestion(
-        title: 'Upper Body Workout',
-        message: 'You recently focused on lower body, so training upper body next will help maintain balance.',
-      );
-    }
-
-    // Mixed or unclear - suggest full body
-    return const NextWorkoutSuggestion(
-      title: 'Full Body Workout',
-      message: 'Your last session was mixed. A full body workout is a solid next choice.',
+      message:
+          'Your training looks well-rounded. Keep logging your sessions to track your progress.',
     );
   }
 

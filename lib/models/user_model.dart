@@ -1,4 +1,4 @@
-﻿import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class UserModel {
   final String uid;
@@ -9,10 +9,11 @@ class UserModel {
   final bool isAnonymous;
   // profile extras - stored for future use in recommendations
   final String experienceLevel; // 'Beginner', 'Intermediate', 'Advanced', or ''
-  final String fitnessGoal;     // 'Build Muscle', 'Lose Weight', 'Improve Fitness', or ''
+  final String
+  fitnessGoal; // 'Build Muscle', 'Lose Weight', 'Improve Fitness', or ''
   // single training goal
-  final String goalExercise;      // exercise name the user is targeting, or ''
-  final double goalTargetWeight;  // target weight in kg (0 = no goal set)
+  final String goalExercise; // exercise name the user is targeting, or ''
+  final double goalTargetWeight; // target weight in kg (0 = no goal set)
   // personal records: exercise name -> best estimated 1RM achieved
   final Map<String, double> personalRecords;
   // preferred weight display unit: 'kg' or 'lbs'

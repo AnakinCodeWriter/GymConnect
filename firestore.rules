@@ -1,0 +1,146 @@
+rules_version = '2';
+
+// GymConnect Firestore security rules (Phase 10).
+//
+// Access model (docs/FIRESTORE_SECURITY.md):
+// - everything under users/{uid} belongs to exactly that user;
+// - gyms/{gymId}/leaderboard is shared, but only within the member's own
+//   gym (membership = the caller's own profile gymId), and each member may
+//   write only their own entry;
+// - everything else is denied (no match = deny by default).
+//
+// Validation is deliberately conservative-but-flexible: important fields
+// are type-checked when present, required core fields are enforced, but
+// unknown optional fields on user-owned documents are tolerated so
+// backward-compatible evolution (the project's standing storage rule)
+// doesn't require a rules deployment. The leaderboard is the exception:
+// it is readable by other users, so its field set is closed.
+//
+// Rules validate ownership and shape, not truth: lift values are
+// self-reported (trust-based product decision) and workout internals
+// (sets/reps arrays) are not deep-validated here.
+//
+// NEVER deployed automatically. Manual deployment steps + checklist:
+// docs/FIRESTORE_SECURITY.md.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // The caller's own profile document (1 cached read per evaluation).
+    function callerProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function memberOfGym(gymId) {
+      return signedIn() && callerProfile().gymId == gymId;
+    }
+
+    // Type check helper for OPTIONAL fields: absent or the right type.
+    function optionalString(data, field) {
+      return !(field in data) || data[field] is string;
+    }
+
+    function optionalBool(data, field) {
+      return !(field in data) || data[field] is bool;
+    }
+
+    function optionalNumber(data, field) {
+      return !(field in data) || data[field] is number;
+    }
+
+    function optionalMap(data, field) {
+      return !(field in data) || data[field] is map;
+    }
+
+    // ---- users/{uid}: the owner's private profile ----
+
+    function validProfile() {
+      let d = request.resource.data;
+      return d.displayName is string
+          && d.gymId is string
+          && d.createdAt is timestamp
+          && optionalBool(d, 'isAnonymous')
+          && optionalString(d, 'experienceLevel')
+          && optionalString(d, 'fitnessGoal')
+          && optionalString(d, 'goalExercise')
+          && optionalNumber(d, 'goalTargetWeight')
+          && optionalMap(d, 'personalRecords')
+          && optionalString(d, 'weightUnit');
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validProfile();
+      allow delete: if false; // no client flow deletes profiles
+
+      // ---- users/{uid}/workouts/{id} ----
+      // Demo tag fields (Phase 9) are optional data-only fields: they are
+      // type-checked when present and grant no access whatsoever.
+      function validWorkout() {
+        let d = request.resource.data;
+        return d.date is timestamp
+            && d.exercises is list
+            && optionalString(d, 'name')
+            && (!('feelRating' in d)
+                || (d.feelRating is int
+                    && d.feelRating >= 1
+                    && d.feelRating <= 5))
+            && optionalBool(d, 'isDemo')
+            && optionalString(d, 'demoScenario')
+            && optionalString(d, 'demoBatchId')
+            && optionalString(d, 'demoGeneratedAt');
+      }
+
+      match /workouts/{workoutId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validWorkout();
+      }
+
+      // ---- users/{uid}/templates/{id} ----
+      function validTemplate() {
+        let d = request.resource.data;
+        return d.name is string && d.exercises is list;
+      }
+
+      match /templates/{templateId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validTemplate();
+      }
+    }
+
+    // ---- gyms/{gymId}/leaderboard/{uid} ----
+    // Readable by the gym's members only; each member writes only their
+    // own entry, and only for the gym their profile says they belong to.
+    // Field set is CLOSED because these documents are cross-user readable.
+    //
+    // Anonymity invariant: rules cannot redact fields from a readable
+    // document, so an anonymous entry must not CONTAIN a real name - the
+    // stored displayName must be exactly the safe value.
+    function validLeaderboardEntry() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['displayName', 'isAnonymous', 'bestLifts'])
+          && d.displayName is string
+          && d.isAnonymous is bool
+          && optionalMap(d, 'bestLifts')
+          && (d.isAnonymous == false || d.displayName == 'Anonymous');
+    }
+
+    match /gyms/{gymId}/leaderboard/{entryUid} {
+      allow read: if memberOfGym(gymId);
+      allow create, update: if isOwner(entryUid)
+          && memberOfGym(gymId)
+          && validLeaderboardEntry();
+      allow delete: if false; // no client flow deletes entries
+    }
+
+    // Anything not matched above is denied by default.
+  }
+}

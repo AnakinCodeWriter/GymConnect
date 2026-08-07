@@ -1,4 +1,4 @@
-﻿import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class WorkoutSet {
   final double weight;
@@ -13,11 +13,14 @@ class WorkoutSet {
     return m;
   }
 
+  // Tolerant numeric parsing (Phase 4): stored numbers may arrive as int or
+  // double, so both fields coerce via num. Missing/mistyped required fields
+  // still throw; collection loads catch per document and report it skipped.
   factory WorkoutSet.fromMap(Map<String, dynamic> map) => WorkoutSet(
-        weight: (map['weight'] as num).toDouble(),
-        reps: map['reps'] as int,
-        isWarmup: map['isWarmup'] as bool? ?? false,
-      );
+    weight: (map['weight'] as num).toDouble(),
+    reps: (map['reps'] as num).toInt(),
+    isWarmup: map['isWarmup'] as bool? ?? false,
+  );
 }
 
 class ExerciseEntry {
@@ -27,16 +30,16 @@ class ExerciseEntry {
   ExerciseEntry({required this.name, required this.sets});
 
   Map<String, dynamic> toMap() => {
-        'name': name,
-        'sets': sets.map((s) => s.toMap()).toList(),
-      };
+    'name': name,
+    'sets': sets.map((s) => s.toMap()).toList(),
+  };
 
   factory ExerciseEntry.fromMap(Map<String, dynamic> map) => ExerciseEntry(
-        name: map['name'] as String,
-        sets: (map['sets'] as List)
-            .map((s) => WorkoutSet.fromMap(s as Map<String, dynamic>))
-            .toList(),
-      );
+    name: map['name'] as String,
+    sets: (map['sets'] as List)
+        .map((s) => WorkoutSet.fromMap(s as Map<String, dynamic>))
+        .toList(),
+  );
 }
 
 class WorkoutModel {

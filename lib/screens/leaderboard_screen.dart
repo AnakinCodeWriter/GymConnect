@@ -1,7 +1,9 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/leaderboard_service.dart';
 import '../services/firestore_service.dart';
+import '../utils/units.dart';
+import '../widgets/state_views.dart';
 import '../main.dart';
 
 class LeaderboardScreen extends StatefulWidget {
@@ -21,7 +23,13 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
   String? _selectedExercise;
 
   bool _loading = true;
+  // failure loading the profile or leaderboard - distinct from "no gym ID"
+  // so a network error is never misreported as a missing gym (Phase 4).
+  bool _loadFailed = false;
   bool _isAnonymous = false;
+  // profile display name, needed to restore the readable leaderboard name
+  // when anonymity is switched off (Phase 10).
+  String _displayName = '';
   String? _gymId;
   String? _uid;
 
@@ -34,6 +42,10 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
   // fetches the user's profile (for gymId and anonymity setting)
   // then loads the leaderboard for their gym.
   Future<void> _loadData() async {
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
     try {
       _uid = FirebaseAuth.instance.currentUser!.uid;
       final profile = await _firestoreService.getUserProfile(_uid!);
@@ -46,7 +58,17 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
       }
 
       _gymId = profile.gymId;
-      final entries = await _leaderboardService.getLeaderboard(_gymId!);
+      final result = await _leaderboardService.loadLeaderboard(_gymId!);
+      final entries = result.dataOrNull;
+      if (entries == null) {
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            _loadFailed = true;
+          });
+        }
+        return;
+      }
 
       // collect all exercise names that exist across all entries, then sort
       final exerciseSet = <String>{};
@@ -57,32 +79,56 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
       if (!mounted) return;
       setState(() {
         _isAnonymous = profile.isAnonymous;
+        _displayName = profile.displayName;
         _entries = entries;
         _exercises = exerciseSet.toList()..sort();
         _loading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadFailed = true;
+        });
+      }
     }
   }
 
   // flips the user's anonymity preference, persisting it to both
-  // their user profile and their leaderboard entry.
+  // their user profile and their leaderboard entry. Reverts the toggle and
+  // tells the user if persisting fails (previously an unhandled error).
   Future<void> _toggleAnonymous() async {
+    final previous = _isAnonymous;
     final newValue = !_isAnonymous;
     setState(() => _isAnonymous = newValue);
 
-    // update both documents in parallel
-    await Future.wait([
-      _firestoreService.updateAnonymous(_uid!, newValue),
-      if (_gymId != null)
-        _leaderboardService.setAnonymous(_uid!, _gymId!, newValue),
-    ]);
+    try {
+      // update both documents in parallel
+      await Future.wait([
+        _firestoreService.updateAnonymous(_uid!, newValue),
+        if (_gymId != null)
+          _leaderboardService.setAnonymous(
+            _uid!,
+            _gymId!,
+            newValue,
+            displayName: _displayName,
+          ),
+      ]);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isAnonymous = previous);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Couldn\'t update your visibility.')),
+      );
+      return;
+    }
 
     // refresh the list so the current user's own row updates immediately
     if (_gymId != null) {
-      final entries = await _leaderboardService.getLeaderboard(_gymId!);
-      setState(() => _entries = entries);
+      final entries = (await _leaderboardService.loadLeaderboard(
+        _gymId!,
+      )).dataOrNull;
+      if (entries != null && mounted) setState(() => _entries = entries);
     }
   }
 
@@ -93,8 +139,11 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
     return _entries
         .where((e) => e.bestLifts.containsKey(_selectedExercise))
         .toList()
-      ..sort((a, b) => b.bestLifts[_selectedExercise]!
-          .compareTo(a.bestLifts[_selectedExercise]!));
+      ..sort(
+        (a, b) => b.bestLifts[_selectedExercise]!.compareTo(
+          a.bestLifts[_selectedExercise]!,
+        ),
+      );
   }
 
   @override
@@ -105,9 +154,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         actions: [
           // toggle between showing the user's name and appearing anonymous
           IconButton(
-            icon: Icon(
-              _isAnonymous ? Icons.visibility_off : Icons.visibility,
-            ),
+            icon: Icon(_isAnonymous ? Icons.visibility_off : Icons.visibility),
             tooltip: _isAnonymous
                 ? 'You are anonymous - tap to show your name'
                 : 'You are visible - tap to go anonymous',
@@ -116,30 +163,32 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const LoadingView()
+          : _loadFailed
+          ? ErrorRetryView(
+              title: 'Couldn\'t load the leaderboard',
+              message: 'Check your connection and try again.',
+              onRetry: _loadData,
+            )
           : _gymId == null
-              ? const Center(
-                  child: Text(
-                    'No gym ID set on your account.\nPlease update your profile.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                )
-              : _entries.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No leaderboard data yet.\nLog a workout to appear here!',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    )
-                  : Column(
-                      children: [
-                        _buildAnonymityBanner(),
-                        _buildExerciseChips(),
-                        Expanded(child: _buildRankedList()),
-                      ],
-                    ),
+          ? const EmptyView(
+              icon: Icons.fitness_center,
+              message:
+                  'No gym ID set on your account.\nPlease update your profile.',
+            )
+          : _entries.isEmpty
+          ? const EmptyView(
+              icon: Icons.leaderboard,
+              message:
+                  'No leaderboard data yet.\nLog a workout to appear here!',
+            )
+          : Column(
+              children: [
+                _buildAnonymityBanner(),
+                _buildExerciseChips(),
+                Expanded(child: _buildRankedList()),
+              ],
+            ),
     );
   }
 
@@ -174,8 +223,8 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
           return FilterChip(
             label: Text(name),
             selected: selected,
-            onSelected: (_) => setState(() =>
-                _selectedExercise = selected ? null : name),
+            onSelected: (_) =>
+                setState(() => _selectedExercise = selected ? null : name),
           );
         },
       ),
@@ -215,9 +264,8 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
     final isCurrentUser = entry.uid == _uid;
     final name = entry.isAnonymous ? 'Anonymous' : entry.displayName;
     final e1rmKg = entry.bestLifts[_selectedExercise]!;
-    final isLbs = weightUnitNotifier.value == 'lbs';
-    final displayE1rm = isLbs ? e1rmKg * 2.20462 : e1rmKg;
-    final unit = isLbs ? 'lbs' : 'kg';
+    final unit = weightUnitLabel(weightUnitNotifier.value);
+    final displayE1rm = kgToDisplayUnit(e1rmKg, unit);
 
     // medal colours for top 3
     final rankColor = switch (rank) {
@@ -247,22 +295,24 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
           child: Text(
             '$rank',
             style: const TextStyle(
-                fontWeight: FontWeight.bold, color: Colors.white),
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
           ),
         ),
         title: Text(
           name,
           style: TextStyle(
-            fontWeight:
-                isCurrentUser ? FontWeight.bold : FontWeight.normal,
+            fontWeight: isCurrentUser ? FontWeight.bold : FontWeight.normal,
           ),
         ),
         subtitle: isCurrentUser
             ? Text(
                 entry.isAnonymous ? '(you - anonymous)' : '(you)',
                 style: TextStyle(
-                    fontSize: 11,
-                    color: Theme.of(context).colorScheme.primary),
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
               )
             : null,
         trailing: Text(

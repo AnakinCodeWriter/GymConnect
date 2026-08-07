@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/template_model.dart';
 import '../services/template_service.dart';
@@ -43,17 +43,22 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
   }
 
   Future<void> _loadTemplates() async {
-    try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      final templates = await _templateService.getTemplates(uid);
-      if (!mounted) return;
-      setState(() {
-        _templates = templates;
-        _loading = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final result = await _templateService.loadTemplates(uid);
+    if (!mounted) return;
+    final templates = result.dataOrNull;
+    if (templates == null) {
+      // typed data-access failure - say so instead of showing an empty list
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Couldn\'t load templates.')),
+      );
+      return;
     }
+    setState(() {
+      _templates = templates;
+      _loading = false;
+    });
   }
 
   // switches to editor mode, optionally pre-filling with an existing template.
@@ -72,8 +77,8 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
           final weight = set.weight == null
               ? ''
               : set.weight! % 1 == 0
-                  ? set.weight!.toInt().toString()
-                  : set.weight!.toString();
+              ? set.weight!.toInt().toString()
+              : set.weight!.toString();
           ex.sets.add(_TplSetData(reps: set.reps.toString(), weight: weight));
         }
         _editorExercises.add(ex);
@@ -130,7 +135,9 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
         }
         final weightText = s.weightController.text.trim();
         if (weightText.isNotEmpty && double.tryParse(weightText) == null) {
-          setState(() => _editorError = 'Enter a valid weight, or leave it blank.');
+          setState(
+            () => _editorError = 'Enter a valid weight, or leave it blank.',
+          );
           return;
         }
       }
@@ -213,10 +220,12 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
       if (sets.isNotEmpty) {
         // prefill new set from the previous set's values
         final prev = sets.last;
-        sets.add(_TplSetData(
-          reps: prev.repsController.text,
-          weight: prev.weightController.text,
-        ));
+        sets.add(
+          _TplSetData(
+            reps: prev.repsController.text,
+            weight: prev.weightController.text,
+          ),
+        );
       } else {
         sets.add(_TplSetData());
       }
@@ -234,9 +243,11 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_showEditor
-            ? (_editingId == null ? 'New Template' : 'Edit Template')
-            : 'Workout Templates'),
+        title: Text(
+          _showEditor
+              ? (_editingId == null ? 'New Template' : 'Edit Template')
+              : 'Workout Templates',
+        ),
         // in editor mode, replace the default back button with an explicit cancel
         leading: _showEditor
             ? IconButton(
@@ -263,8 +274,8 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _showEditor
-              ? _buildEditor()
-              : _buildList(),
+          ? _buildEditor()
+          : _buildList(),
     );
   }
 
@@ -286,7 +297,8 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
                   itemCount: _templates.length,
-                  itemBuilder: (context, i) => _buildTemplateCard(_templates[i]),
+                  itemBuilder: (context, i) =>
+                      _buildTemplateCard(_templates[i]),
                 ),
         ),
         Padding(
@@ -332,7 +344,9 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
                   Text(
                     template.name,
                     style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   if (summary.isNotEmpty)
                     Padding(
@@ -340,7 +354,9 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
                       child: Text(
                         summary,
                         style: TextStyle(
-                            fontSize: 12, color: Colors.grey.shade600),
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -373,7 +389,10 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
             width: double.infinity,
             color: Colors.red.shade100,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text(_editorError!, style: const TextStyle(color: Colors.red)),
+            child: Text(
+              _editorError!,
+              style: const TextStyle(color: Colors.red),
+            ),
           ),
         Expanded(
           child: ListView(
@@ -448,13 +467,17 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
                   children: [
                     SizedBox(width: 8),
                     Expanded(
-                      child: Text('Reps',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      child: Text(
+                        'Reps',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
                     ),
                     SizedBox(width: 8),
                     Expanded(
-                      child: Text('Weight (optional)',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      child: Text(
+                        'Weight (optional)',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
                     ),
                     SizedBox(width: 36),
                   ],
@@ -479,8 +502,10 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
         children: [
-          Text('${setIndex + 1}. ',
-              style: const TextStyle(fontSize: 13, color: Colors.grey)),
+          Text(
+            '${setIndex + 1}. ',
+            style: const TextStyle(fontSize: 13, color: Colors.grey),
+          ),
           Expanded(
             child: TextField(
               controller: s.repsController,
@@ -503,8 +528,9 @@ class _WorkoutTemplatesScreenState extends State<WorkoutTemplatesScreen> {
                 isDense: true,
                 suffixText: 'kg',
               ),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
             ),
           ),
           IconButton(
@@ -539,8 +565,8 @@ class _TplSetData {
   final TextEditingController weightController;
 
   _TplSetData({String reps = '', String weight = ''})
-      : repsController = TextEditingController(text: reps),
-        weightController = TextEditingController(text: weight);
+    : repsController = TextEditingController(text: reps),
+      weightController = TextEditingController(text: weight);
 
   void dispose() {
     repsController.dispose();

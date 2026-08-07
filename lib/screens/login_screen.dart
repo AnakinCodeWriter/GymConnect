@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
 import '../widgets/auth_text_field.dart';
@@ -87,10 +87,7 @@ class _LoginScreenState extends State<LoginScreen> {
             const SizedBox(height: 8),
             _isLoading
                 ? const CircularProgressIndicator()
-                : ElevatedButton(
-                    onPressed: _login,
-                    child: const Text('Login'),
-                  ),
+                : ElevatedButton(onPressed: _login, child: const Text('Login')),
             TextButton(
               onPressed: () => Navigator.push(
                 context,

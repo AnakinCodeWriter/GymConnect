@@ -1,68 +1,146 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../services/auth_service.dart';
-import '../services/firestore_service.dart';
-import '../services/workout_service.dart';
-import '../services/recommendation_service.dart';
-import '../services/feel_analysis_service.dart';
-import '../main.dart';
-import 'login_screen.dart';
-import 'log_workout_screen.dart';
-import 'profile_screen.dart';
-import 'progress_screen.dart';
-import 'starter_plan_screen.dart';
-import 'leaderboard_screen.dart';
 
+import '../models/analytics.dart';
+import '../models/dashboard.dart';
+import '../models/user_model.dart';
+import '../models/workout_model.dart';
+import '../services/dashboard_service.dart';
+import '../services/data_result.dart';
+import '../services/feel_analysis_service.dart';
+import '../services/firestore_service.dart';
+import '../services/recommendation_service.dart';
+import '../services/workout_service.dart';
+import '../theme/app_tokens.dart';
+import '../utils/dates.dart';
+import '../utils/units.dart';
+import '../widgets/goal_card.dart';
+import '../widgets/insight_card.dart';
+import '../widgets/state_views.dart';
+import '../widgets/stat_card.dart';
+import '../widgets/status_banner.dart';
+import '../main.dart';
+import 'app_shell.dart';
+import 'log_workout_screen.dart';
+
+/// What the dashboard needs loaded: the workout history result plus the
+/// profile (null when missing or when its load failed - the dashboard then
+/// renders partially without greeting/goal rather than failing entirely).
+class DashboardLoadResult {
+  final DataResult<List<WorkoutModel>> workouts;
+  final UserModel? profile;
+
+  const DashboardLoadResult({required this.workouts, this.profile});
+}
+
+typedef DashboardLoader = Future<DashboardLoadResult> Function();
+
+/// The Dashboard destination (Phase 6): typed metrics from DashboardService.
+/// [loader] is injectable so widget tests run without Firebase.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final DashboardLoader? loader;
+
+  const HomeScreen({super.key, this.loader});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _workoutService = WorkoutService();
   final _recommendationService = RecommendationService();
-  final _firestoreService = FirestoreService();
 
+  DashboardData? _dashboard;
+  UserModel? _profile;
   Recommendation? _recommendation;
   FeelInsight? _feelInsight;
-  String? _displayName;
-  String? _goalExercise;
-  double _goalTargetWeight = 0;
-  double _goalCurrentBest = 0;
+
+  bool _loading = true;
+  bool _initialLoadFailed = false;
+  // refresh failed while last-known data stays visible below the banner.
+  bool _refreshFailed = false;
+  int _lastLoadedVersion = 0;
 
   @override
   void initState() {
     super.initState();
+    workoutDataVersion.addListener(_onDataVersionChanged);
     _loadData();
   }
 
-  // fetches the user profile and workouts from Firestore in parallel,
-  // then generates the recommendation and next workout suggestion.
-  Future<void> _loadData() async {
-    try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      // start both requests before awaiting either, so they run in parallel.
-      final profileFuture = _firestoreService.getUserProfile(uid);
-      final workoutsFuture = _workoutService.getWorkouts(uid);
-      final profile = await profileFuture;
-      final workouts = await workoutsFuture;
-      if (!mounted) return;
-      setState(() {
-        final name = profile?.displayName;
-        _displayName = (name != null && name.isNotEmpty) ? name : null;
-        _recommendation = _recommendationService.generate(workouts);
-        _feelInsight = FeelAnalysisService.analyse(workouts);
-        _goalExercise = profile?.goalExercise;
-        _goalTargetWeight = profile?.goalTargetWeight ?? 0;
-        _goalCurrentBest =
-            profile?.personalRecords[profile.goalExercise] ?? 0;
-      });
-    } catch (_) {
-      // silently ignore load errors - the home screen remains usable
-      // and the user can still navigate or sign out
+  @override
+  void dispose() {
+    workoutDataVersion.removeListener(_onDataVersionChanged);
+    super.dispose();
+  }
+
+  // Another screen saved/deleted training or profile data - reload unless
+  // this screen already loaded that version.
+  void _onDataVersionChanged() {
+    if (workoutDataVersion.value != _lastLoadedVersion) _loadData();
+  }
+
+  // Production loader; constructed lazily so tests injecting [widget.loader]
+  // never touch Firebase.
+  static Future<DashboardLoadResult> _productionLoader() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    UserModel? profile;
+    if (uid != null) {
+      try {
+        profile = await FirestoreService().getUserProfile(uid);
+      } catch (_) {
+        profile = null; // non-critical: partial dashboard without goal
+      }
     }
+    final workouts = await WorkoutService().loadWorkouts();
+    return DashboardLoadResult(workouts: workouts, profile: profile);
+  }
+
+  Future<void> _loadData() async {
+    final version = workoutDataVersion.value;
+    final result = await (widget.loader ?? _productionLoader)();
+    if (!mounted) return;
+    _lastLoadedVersion = version;
+
+    final workouts = result.workouts.dataOrNull;
+    if (workouts == null) {
+      setState(() {
+        if (_dashboard == null) {
+          _initialLoadFailed = true;
+        } else {
+          _refreshFailed = true; // keep last-known data visible
+        }
+        _loading = false;
+      });
+      return;
+    }
+
+    final skipped = switch (result.workouts) {
+      DataSuccess(:final skipped) => skipped.length,
+      _ => 0,
+    };
+    setState(() {
+      _dashboard = DashboardService.build(
+        workouts,
+        referenceDate: DateTime.now(),
+        skippedRecords: skipped,
+      );
+      _profile = result.profile;
+      _recommendation = _recommendationService.generate(workouts);
+      _feelInsight = FeelAnalysisService.analyse(workouts);
+      _loading = false;
+      _initialLoadFailed = false;
+      _refreshFailed = false;
+    });
+  }
+
+  Future<void> _openLogWorkout() async {
+    final newPRs = await Navigator.push<List<String>>(
+      context,
+      MaterialPageRoute(builder: (_) => const LogWorkoutScreen()),
+    );
+    // reload happens via the workoutDataVersion listener after a save.
+    if (!mounted) return;
+    if (newPRs != null && newPRs.isNotEmpty) _showPRDialog(newPRs);
   }
 
   void _showPRDialog(List<String> exercises) {
@@ -89,8 +167,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     const Icon(Icons.star, size: 16, color: Colors.amber),
                     const SizedBox(width: 6),
-                    Text(e,
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text(
+                      e,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ],
                 ),
               ),
@@ -109,363 +189,370 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('GymConnect'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_outline),
-            tooltip: 'My Profile',
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              );
-              if (mounted) _loadData();
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Sign out',
-            onPressed: () async {
-              final navigator = Navigator.of(context);
-              await AuthService().signOut();
-              navigator.pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-                (_) => false,
-              );
-            },
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Welcome, ${_displayName ?? user?.email ?? 'User'}!',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () async {
-                final newPRs = await Navigator.push<List<String>>(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LogWorkoutScreen()),
-                );
-                if (!mounted) return;
+      appBar: AppBar(title: const Text('GymConnect')),
+      body: _loading
+          ? const LoadingView()
+          : _initialLoadFailed && _dashboard == null
+          ? ErrorRetryView(
+              title: 'Couldn\'t load your dashboard',
+              message: 'Check your connection and try again.',
+              onRetry: () {
+                setState(() {
+                  _loading = true;
+                  _initialLoadFailed = false;
+                });
                 _loadData();
-                if (newPRs != null && newPRs.isNotEmpty) {
-                  _showPRDialog(newPRs);
-                }
               },
-              icon: const Icon(Icons.fitness_center),
-              label: const Text('Log Workout'),
+            )
+          : _buildDashboard(_dashboard!),
+    );
+  }
+
+  Widget _buildDashboard(DashboardData d) {
+    final name = _profile?.displayName;
+    final unit = weightUnitLabel(weightUnitNotifier.value);
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: Insets.page,
+        children: [
+          Text(
+            name != null && name.isNotEmpty
+                ? 'Welcome back, $name!'
+                : 'Welcome!',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Week of ${formatDayMonth(d.currentWeek.start)} – ${formatDayMonth(d.currentWeek.end)}',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProgressScreen()),
-              ),
-              icon: const Icon(Icons.bar_chart),
-              label: const Text('View Progress'),
+          ),
+          const SizedBox(height: Insets.lg),
+          ElevatedButton.icon(
+            onPressed: _openLogWorkout,
+            icon: const Icon(Icons.fitness_center),
+            label: const Text('Log Workout'),
+          ),
+          const SizedBox(height: Insets.lg),
+          if (_refreshFailed) ...[
+            StatusBanner(
+              icon: Icons.cloud_off,
+              title: 'Couldn\'t refresh your training data',
+              message:
+                  'Showing your last loaded data. Check your connection and retry.',
+              actionLabel: 'Retry',
+              onAction: _loadData,
             ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const LeaderboardScreen()),
-              ),
-              icon: const Icon(Icons.leaderboard),
-              label: const Text('Gym Leaderboard'),
+            const SizedBox(height: Insets.md),
+          ],
+          if (d.skippedRecords > 0) ...[
+            InlineNotice(
+              message:
+                  '${d.skippedRecords} workout record${d.skippedRecords == 1 ? '' : 's'} '
+                  'couldn\'t be read and ${d.skippedRecords == 1 ? 'is' : 'are'} not included.',
             ),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const StarterPlanScreen()),
-              ),
-              icon: const Icon(Icons.help_outline),
-              label: const Text('Not sure what to do? Start here'),
-            ),
-            const SizedBox(height: 24),
-            // shown only when a goal is set and loaded
-            if (_goalExercise != null &&
-                _goalExercise!.isNotEmpty &&
-                _goalTargetWeight > 0) ...[
-              _GoalCard(
-                exercise: _goalExercise!,
-                currentBest: _goalCurrentBest,
-                targetWeight: _goalTargetWeight,
-              ),
-              const SizedBox(height: 12),
-            ],
-            // only shown once the recommendation has loaded from Firestore.
-            if (_recommendation != null)
-              _RecommendationCard(recommendation: _recommendation!),
-            if (_feelInsight != null) ...[
-              const SizedBox(height: 12),
-              _FeelInsightCard(insight: _feelInsight!),
-            ],
-            const SizedBox(height: 32),
-            const Divider(),
-            ValueListenableBuilder<ThemeMode>(
-              valueListenable: themeModeNotifier,
-              builder: (context, mode, _) => SwitchListTile(
-                title: const Text('Dark Mode'),
-                secondary: Icon(
-                  mode == ThemeMode.dark
-                      ? Icons.dark_mode
-                      : Icons.light_mode,
+            const SizedBox(height: Insets.md),
+          ],
+          if (d.status == TrainingStatus.noData)
+            const EmptyView(
+              icon: Icons.fitness_center,
+              message:
+                  'No workouts yet.\nLog your first workout to start tracking progress!',
+            )
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: StatCard(
+                    icon: Icons.event_available,
+                    label: 'Workouts this week',
+                    value: '${d.activity.thisWeek}',
+                    subtitle: _activitySubtitle(d.activity),
+                  ),
                 ),
-                value: mode == ThemeMode.dark,
-                onChanged: (on) {
-                  themeModeNotifier.value =
-                      on ? ThemeMode.dark : ThemeMode.light;
-                  saveThemePreference(on);
+                const SizedBox(width: Insets.md),
+                Expanded(
+                  child: StatCard(
+                    icon: Icons.bar_chart,
+                    label: 'Volume this week',
+                    value:
+                        '${formatCompactWeight(kgToDisplayUnit(d.volume.thisWeekKg, unit))} $unit',
+                    subtitle: _volumeSubtitle(d.volume),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: Insets.md),
+            _statusCard(d),
+            const SizedBox(height: Insets.xs),
+            Text(
+              'Based on ${_qualityLabel(d.dataQuality)} data.',
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: Insets.md),
+            if (_profile != null &&
+                _profile!.goalExercise.isNotEmpty &&
+                _profile!.goalTargetWeight > 0) ...[
+              GoalCard(
+                exercise: _profile!.goalExercise,
+                currentBest:
+                    _profile!.personalRecords[_profile!.goalExercise] ?? 0,
+                targetWeight: _profile!.goalTargetWeight,
+              ),
+              const SizedBox(height: Insets.md),
+            ],
+            if (d.topExercises.isNotEmpty) ...[
+              _listCard(
+                title: 'Most trained (last 4 weeks) — tap to inspect',
+                rows: [
+                  for (final t in d.topExercises)
+                    (
+                      t.name,
+                      '${t.workoutCount} workout${t.workoutCount == 1 ? '' : 's'}',
+                    ),
+                ],
+                // preselect the exercise on the Progress tab (Phase 7)
+                onRowTap: (name) {
+                  progressExerciseRequest.value = name;
+                  AppShellTabs.switchTo(context, 1);
                 },
               ),
+              const SizedBox(height: Insets.md),
+            ],
+            if (d.recentPersonalRecords.isNotEmpty) ...[
+              _listCard(
+                title: 'Recent personal records (last 2 weeks)',
+                rows: [
+                  for (final pr in d.recentPersonalRecords)
+                    (
+                      pr.exercise,
+                      '${formatWeight(kgToDisplayUnit(pr.e1RmKg, unit))} $unit · ${formatDayMonth(pr.day)}',
+                    ),
+                ],
+              ),
+              const SizedBox(height: Insets.md),
+            ],
+            // rule-based recommendation kept for its balance/keep-going
+            // advice; the plateau/regression branch is superseded by the
+            // evidence-backed training status above (see docs/DECISIONS.md).
+            if (_recommendation != null &&
+                (_recommendation!.type == RecommendationType.balanceWorkout ||
+                    _recommendation!.type == RecommendationType.keepGoing)) ...[
+              _recommendationCard(_recommendation!),
+              const SizedBox(height: Insets.md),
+            ],
+            if (_feelInsight != null) ...[
+              _feelInsightCard(_feelInsight!),
+              const SizedBox(height: Insets.md),
+            ],
+            OutlinedButton.icon(
+              onPressed: () => AppShellTabs.switchTo(context, 1),
+              icon: const Icon(Icons.show_chart),
+              label: const Text('View detailed progress'),
             ),
           ],
-        ),
-      ),
+        ],
       ),
     );
   }
-}
 
-// Shows the user's single training goal with a progress bar.
-class _GoalCard extends StatelessWidget {
-  final String exercise;
-  final double currentBest;
-  final double targetWeight;
+  String _activitySubtitle(WeeklyActivity a) {
+    if (a.change > 0) return '+${a.change} vs last week (${a.previousWeek})';
+    if (a.change < 0) return '${a.change} vs last week (${a.previousWeek})';
+    return 'same as last week (${a.previousWeek})';
+  }
 
-  const _GoalCard({
-    required this.exercise,
-    required this.currentBest,
-    required this.targetWeight,
-  });
+  String _volumeSubtitle(WeeklyVolume v) {
+    final change = v.change.valueOrNull;
+    if (change != null) {
+      final sign = change.percent >= 0 ? '+' : '';
+      return '$sign${change.percent.toStringAsFixed(0)}% vs last week';
+    }
+    return 'no comparison available';
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final isLbs = weightUnitNotifier.value == 'lbs';
-    final factor = isLbs ? 2.20462 : 1.0;
-    final unit = isLbs ? 'lbs' : 'kg';
-    final displayCurrent = currentBest * factor;
-    final displayTarget = targetWeight * factor;
-    final progress = (currentBest / targetWeight).clamp(0.0, 1.0);
-    final percent = (progress * 100).toStringAsFixed(0);
-    final achieved = currentBest >= targetWeight;
+  Widget _statusCard(DashboardData d) {
+    String warningEvidence() => d.trendWarnings
+        .map(
+          (w) =>
+              '${w.exercise}: estimated 1RM looks '
+              '${w.concern == TrendConcern.plateau ? 'flat' : 'to be declining'} '
+              'across ${w.sessionCount} sessions.',
+        )
+        .join('\n');
 
+    final (icon, color, title, message) = switch (d.status) {
+      TrainingStatus.noData => (
+        Icons.flag_outlined,
+        Colors.blue,
+        'No data yet',
+        'Log a workout to get started.',
+      ),
+      TrainingStatus.gettingStarted => (
+        Icons.directions_run,
+        Colors.blue,
+        'Getting started',
+        'Trend analysis unlocks as you log more sessions - keep going!',
+      ),
+      TrainingStatus.possibleRegression => (
+        Icons.trending_down,
+        Colors.red,
+        'Possible regression',
+        '${warningEvidence()}\nWorth reviewing in Progress - recovery, form '
+            'or volume could all play a part.',
+      ),
+      TrainingStatus.possiblePlateau => (
+        Icons.trending_flat,
+        Colors.orange,
+        'Possible plateau',
+        '${warningEvidence()}\nSee Progress for a possible explanation.',
+      ),
+      TrainingStatus.progressing => (
+        Icons.trending_up,
+        Colors.green,
+        'Progressing',
+        'Trending up: ${d.progressingExercises.join(', ')}. Keep it up!',
+      ),
+      TrainingStatus.activeWeek => (
+        Icons.check_circle_outline,
+        Colors.teal,
+        'Active week',
+        '${d.activity.thisWeek} workout${d.activity.thisWeek == 1 ? '' : 's'} '
+            'logged this week.',
+      ),
+      TrainingStatus.needsMoreData => (
+        Icons.hourglass_empty,
+        Colors.blueGrey,
+        'Keep logging',
+        'No sessions yet this week, and not enough recent data for a trend.',
+      ),
+    };
+
+    return InsightCard(
+      icon: icon,
+      color: color,
+      label: 'Training Status',
+      title: title,
+      message: message,
+    );
+  }
+
+  String _qualityLabel(DataQuality q) => switch (q) {
+    DataQuality.insufficient => 'insufficient',
+    DataQuality.limited => 'limited',
+    DataQuality.moderate => 'moderate',
+    DataQuality.strong => 'strong',
+  };
+
+  Widget _listCard({
+    required String title,
+    required List<(String, String)> rows,
+    void Function(String label)? onRowTap,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(Insets.lg),
       decoration: BoxDecoration(
-        color: Colors.deepPurple.withValues(alpha: 0.07),
-        border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.3)),
-        borderRadius: BorderRadius.circular(12),
+        color: Theme.of(
+          context,
+        ).colorScheme.surfaceContainerHighest.withAlpha(120),
+        borderRadius: BorderRadius.circular(Corners.lg),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.flag_outlined, color: Colors.deepPurple, size: 18),
-              const SizedBox(width: 6),
-              const Text(
-                'Training Goal',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.deepPurple,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const Spacer(),
-              if (achieved)
-                const Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.green, size: 16),
-                    SizedBox(width: 4),
-                    Text('Achieved!',
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.green,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                )
-              else
-                Text('$percent%',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.deepPurple,
-                        fontWeight: FontWeight.w600)),
-            ],
-          ),
-          const SizedBox(height: 6),
           Text(
-            exercise,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            currentBest > 0
-                ? 'Current best: ${displayCurrent.toStringAsFixed(1)} $unit  •  Target: ${displayTarget.toStringAsFixed(displayTarget % 1 == 0 ? 0 : 1)} $unit'
-                : 'Target: ${displayTarget.toStringAsFixed(displayTarget % 1 == 0 ? 0 : 1)} $unit  •  No attempts yet',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 8,
-              backgroundColor: Colors.deepPurple.withValues(alpha: 0.15),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                achieved ? Colors.green : Colors.deepPurple,
-              ),
+            title,
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
             ),
           ),
+          const SizedBox(height: Insets.sm),
+          for (final (label, value) in rows)
+            InkWell(
+              onTap: onRowTap != null ? () => onRowTap(label) : null,
+              borderRadius: BorderRadius.circular(Corners.sm),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: const TextStyle(fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(
+                      value,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    if (onRowTap != null) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
-}
 
-// displays the recommendation as a coloured card. The icon and colour
-// change depending on the recommendation type returned by RecommendationService
-class _RecommendationCard extends StatelessWidget {
-  final Recommendation recommendation;
-
-  const _RecommendationCard({required this.recommendation});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _recommendationCard(Recommendation recommendation) {
     final (icon, color) = switch (recommendation.type) {
       RecommendationType.startBeginner => (Icons.directions_run, Colors.blue),
       RecommendationType.balanceWorkout => (Icons.balance, Colors.orange),
-      RecommendationType.plateauAdvice => (Icons.trending_flat, Colors.deepOrange),
+      RecommendationType.plateauAdvice => (
+        Icons.trending_flat,
+        Colors.deepOrange,
+      ),
       RecommendationType.keepGoing => (Icons.thumb_up, Colors.green),
     };
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withAlpha(20),
-        border: Border.all(color: color.withAlpha(80)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Recommended Next Step',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  recommendation.title,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  recommendation.message,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return InsightCard(
+      icon: icon,
+      color: color,
+      label: 'Recommended Next Step',
+      title: recommendation.title,
+      message: recommendation.message,
     );
   }
-}
 
-// Shows a single insight derived from the user's session feel ratings.
-class _FeelInsightCard extends StatelessWidget {
-  final FeelInsight insight;
-
-  const _FeelInsightCard({required this.insight});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _feelInsightCard(FeelInsight insight) {
     final (icon, color) = switch (insight.type) {
       FeelInsightType.lowStreakWarning => (
-          Icons.warning_amber_outlined,
-          Colors.orange,
-        ),
-      FeelInsightType.performanceCorrelation => (
-          Icons.insights,
-          Colors.teal,
-        ),
-      FeelInsightType.bestDayOfWeek => (
-          Icons.calendar_today,
-          Colors.blue,
-        ),
+        Icons.warning_amber_outlined,
+        Colors.orange,
+      ),
+      FeelInsightType.performanceCorrelation => (Icons.insights, Colors.teal),
+      FeelInsightType.bestDayOfWeek => (Icons.calendar_today, Colors.blue),
     };
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withAlpha(20),
-        border: Border.all(color: color.withAlpha(80)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Session Feel Insight',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  insight.title,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  insight.message,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return InsightCard(
+      icon: icon,
+      color: color,
+      label: 'Session Feel Insight',
+      title: insight.title,
+      message: insight.message,
     );
   }
 }
-

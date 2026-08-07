@@ -1,4 +1,4 @@
-﻿import 'dart:math';
+import 'dart:math';
 
 enum PlateauStatus { progressing, plateau, regressing, insufficientData }
 
@@ -24,7 +24,9 @@ class PlateauDetector {
   static PlateauResult analyse(List<(DateTime, double)> sessions) {
     if (sessions.length < minSessions) {
       return const PlateauResult(
-          status: PlateauStatus.insufficientData, slope: 0);
+        status: PlateauStatus.insufficientData,
+        slope: 0,
+      );
     }
 
     // Sort oldest to newest so index 0 is the earliest session.
@@ -56,14 +58,13 @@ class PlateauDetector {
 
     // Normalise by the weighted mean e1RM so the threshold is scale-invariant.
     final weightedMeanY = sumWY / sumW;
-    final normalizedSlope =
-        weightedMeanY > 0 ? slope / weightedMeanY : slope;
+    final normalizedSlope = weightedMeanY > 0 ? slope / weightedMeanY : slope;
 
     final status = normalizedSlope > progressThreshold
         ? PlateauStatus.progressing
         : normalizedSlope < regressThreshold
-            ? PlateauStatus.regressing
-            : PlateauStatus.plateau;
+        ? PlateauStatus.regressing
+        : PlateauStatus.plateau;
 
     return PlateauResult(status: status, slope: slope);
   }

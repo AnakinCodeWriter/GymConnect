@@ -1,18 +1,32 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:fl_chart/fl_chart.dart';
+
+import '../models/analytics.dart';
+import '../models/exercise_detail.dart';
+import '../models/user_model.dart';
 import '../models/workout_model.dart';
-import '../services/workout_service.dart';
+import '../services/data_result.dart';
+import '../services/exercise_analytics_service.dart';
 import '../services/firestore_service.dart';
 import '../services/plateau_detector.dart';
-import '../services/plateau_diagnosis_service.dart';
-import '../utils/fitness_formulas.dart';
+import '../services/workout_service.dart';
+import '../theme/app_tokens.dart';
+import '../utils/dates.dart';
+import '../utils/units.dart';
+import '../widgets/e1rm_chart.dart';
+import '../widgets/evidence_panel.dart';
+import '../widgets/goal_card.dart';
+import '../widgets/insight_card.dart';
+import '../widgets/state_views.dart';
+import '../widgets/stat_card.dart';
+import '../widgets/status_banner.dart';
+import '../widgets/workout_history_card.dart';
 import '../main.dart';
 
 // A flat record of one set from one exercise on one date - used for display.
 class _SetRecord {
-  final String workoutId;   // Firestore document ID - needed for deletion
-  final int setIndex;       // index of this set within the exercise's set list
+  final String workoutId; // Firestore document ID - needed for deletion
+  final int setIndex; // index of this set within the exercise's set list
   final DateTime date;
   final String exerciseName;
   final double weight;
@@ -26,24 +40,55 @@ class _SetRecord {
     required this.weight,
     required this.reps,
   });
-
-  double get estimated1RM => estimatedOneRepMax(weight, reps);
 }
 
+/// What the Progress screen needs loaded: the workout history result plus
+/// the profile (null when missing/failed - the goal card is then omitted
+/// rather than failing the screen).
+class ProgressLoadResult {
+  final DataResult<List<WorkoutModel>> workouts;
+  final UserModel? profile;
+
+  const ProgressLoadResult({required this.workouts, this.profile});
+}
+
+typedef ProgressLoader = Future<ProgressLoadResult> Function();
+
+/// The Progress destination (reworked in Phase 7): per-exercise analytics
+/// with status, metrics, chart, evidence and possible explanations.
+/// [loader], [workoutService] and [profileLoader] are injectable so widget
+/// tests - including the delete-set flow (Phase 11) - run without Firebase.
 class ProgressScreen extends StatefulWidget {
-  const ProgressScreen({super.key});
+  final ProgressLoader? loader;
+
+  /// Used by the delete-set flow; production default is the real service.
+  final WorkoutService? workoutService;
+
+  /// Re-fetches the profile after a deletion so the goal card's current
+  /// best reflects the recalculated PR. Null result = goal best unknown.
+  final Future<UserModel?> Function()? profileLoader;
+
+  const ProgressScreen({
+    super.key,
+    this.loader,
+    this.workoutService,
+    this.profileLoader,
+  });
 
   @override
   State<ProgressScreen> createState() => _ProgressScreenState();
 }
 
 class _ProgressScreenState extends State<ProgressScreen> {
-  final WorkoutService _workoutService = WorkoutService();
-  final FirestoreService _firestoreService = FirestoreService();
   final TextEditingController _filterController = TextEditingController();
 
+  // Lazily resolved so tests that inject fakes never construct the
+  // Firebase-backed service.
+  WorkoutService? _workoutServiceInstance;
+  WorkoutService get _workoutService =>
+      _workoutServiceInstance ??= widget.workoutService ?? WorkoutService();
+
   List<_SetRecord> _allRecords = [];
-  List<_SetRecord> _filtered = [];
   List<WorkoutModel> _allWorkouts = [];
   List<WorkoutModel> _filteredWorkouts = [];
   List<String> _exerciseNames = [];
@@ -54,47 +99,105 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
   bool _loading = true;
   String? _error;
+  // number of stored workout documents that couldn't be read (malformed) -
+  // surfaced in a notice so skipped data is never silent.
+  int _skippedCount = 0;
+
+  // last workoutDataVersion this screen loaded; guards against reloading in
+  // response to its own writes (Phase 6 stale-tab fix).
+  int _lastLoadedVersion = 0;
 
   @override
   void initState() {
     super.initState();
+    workoutDataVersion.addListener(_onDataVersionChanged);
+    progressExerciseRequest.addListener(_onExerciseRequested);
     _loadWorkouts();
     _filterController.addListener(_applyFilter);
   }
 
   @override
   void dispose() {
+    workoutDataVersion.removeListener(_onDataVersionChanged);
+    progressExerciseRequest.removeListener(_onExerciseRequested);
     _filterController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadWorkouts() async {
+  void _onDataVersionChanged() {
+    if (workoutDataVersion.value != _lastLoadedVersion) _loadWorkouts();
+  }
+
+  // The dashboard requested an exercise preselection (Phase 7).
+  void _onExerciseRequested() {
+    final name = progressExerciseRequest.value;
+    if (name == null) return;
+    progressExerciseRequest.value = null; // consume
+    _filterController.text = name;
+  }
+
+  // Production loader; constructed lazily so tests injecting
+  // [widget.loader] never touch Firebase. A profile failure is non-critical
+  // (goal card omitted), matching the dashboard's partial-data policy.
+  static Future<ProgressLoadResult> _productionLoader() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    UserModel? profile;
+    if (uid != null) {
+      try {
+        profile = await FirestoreService().getUserProfile(uid);
+      } catch (_) {
+        profile = null;
+      }
+    }
+    final workouts = await WorkoutService().loadWorkouts();
+    return ProgressLoadResult(workouts: workouts, profile: profile);
+  }
+
+  // Default post-deletion profile fetch. A missing user or a failed fetch
+  // yields null (goal best treated as unknown) instead of crashing or
+  // mis-reporting the successful deletion (Phase 11, backlog #17).
+  static Future<UserModel?> _productionProfileLoader() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return null;
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      final workoutsFuture = _workoutService.getWorkouts(uid);
-      final profileFuture = _firestoreService.getUserProfile(uid);
-      final workouts = await workoutsFuture;
-      final profile = await profileFuture;
-      final records = _flattenToRecords(workouts);
-      final names = records.map((r) => r.exerciseName).toSet().toList()..sort();
-      setState(() {
-        _allRecords = records;
-        _filtered = records;
-        _allWorkouts = workouts;
-        _filteredWorkouts = workouts;
-        _exerciseNames = names;
-        _goalExercise = profile?.goalExercise;
-        _goalTargetWeight = profile?.goalTargetWeight ?? 0;
-        _goalCurrentBest =
-            profile?.personalRecords[profile.goalExercise] ?? 0;
-        _loading = false;
-      });
-    } catch (e) {
+      return await FirestoreService().getUserProfile(uid);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _loadWorkouts() async {
+    _lastLoadedVersion = workoutDataVersion.value;
+    final result = await (widget.loader ?? _productionLoader)();
+    if (!mounted) return;
+
+    final workouts = result.workouts.dataOrNull;
+    if (workouts == null) {
       setState(() {
         _error = 'Failed to load workouts.';
         _loading = false;
       });
+      return;
     }
+    final skipped = switch (result.workouts) {
+      DataSuccess(:final skipped) => skipped.length,
+      _ => 0,
+    };
+    final profile = result.profile;
+    final records = _flattenToRecords(workouts);
+    final names = records.map((r) => r.exerciseName).toSet().toList()..sort();
+    setState(() {
+      _allRecords = records;
+      _allWorkouts = workouts;
+      _exerciseNames = names;
+      _skippedCount = skipped;
+      _goalExercise = profile?.goalExercise;
+      _goalTargetWeight = profile?.goalTargetWeight ?? 0;
+      _goalCurrentBest = profile?.personalRecords[profile.goalExercise] ?? 0;
+      _loading = false;
+      _error = null;
+    });
+    _applyFilter();
   }
 
   List<_SetRecord> _flattenToRecords(List<WorkoutModel> workouts) {
@@ -104,15 +207,17 @@ class _ProgressScreenState extends State<ProgressScreen> {
       for (final exercise in workout.exercises) {
         for (int i = 0; i < exercise.sets.length; i++) {
           final set = exercise.sets[i];
-          if (set.isWarmup) continue; // exclude warm-ups from chart/plateau
-          records.add(_SetRecord(
-            workoutId: workout.id,
-            setIndex: i,
-            date: date,
-            exerciseName: exercise.name,
-            weight: set.weight,
-            reps: set.reps,
-          ));
+          if (set.isWarmup) continue; // history filter uses working sets
+          records.add(
+            _SetRecord(
+              workoutId: workout.id,
+              setIndex: i,
+              date: date,
+              exerciseName: exercise.name,
+              weight: set.weight,
+              reps: set.reps,
+            ),
+          );
         }
       }
     }
@@ -125,15 +230,14 @@ class _ProgressScreenState extends State<ProgressScreen> {
     final query = _filterController.text.trim().toLowerCase();
     setState(() {
       if (query.isEmpty) {
-        _filtered = _allRecords;
         _filteredWorkouts = _allWorkouts;
       } else {
-        _filtered = _allRecords
-            .where((r) => r.exerciseName.toLowerCase().contains(query))
-            .toList();
         _filteredWorkouts = _allWorkouts
-            .where((w) => w.exercises
-                .any((ex) => ex.name.toLowerCase().contains(query)))
+            .where(
+              (w) => w.exercises.any(
+                (ex) => ex.name.toLowerCase().contains(query),
+              ),
+            )
             .toList();
       }
     });
@@ -143,150 +247,22 @@ class _ProgressScreenState extends State<ProgressScreen> {
     _filterController.text = name;
   }
 
-  List<(DateTime, double)>? _getSessionData() {
+  // The typed analytics detail for the exactly-matched filter exercise, or
+  // null when the filter text doesn't exactly match a known exercise name.
+  ExerciseDetail? _detailForCurrentFilter() {
     final query = _filterController.text.trim().toLowerCase();
     if (query.isEmpty) return null;
 
-    final matchedName = _exerciseNames.cast<String?>().firstWhere(
-          (n) => n!.toLowerCase() == query,
-          orElse: () => null,
-        );
-    if (matchedName == null) return null;
-
-    // Best 1RM per calendar day.
-    final byDate = <DateTime, double>{};
-    for (final r in _filtered) {
-      final day = DateTime(r.date.year, r.date.month, r.date.day);
-      final e1rm = r.estimated1RM;
-      if (!byDate.containsKey(day) || byDate[day]! < e1rm) {
-        byDate[day] = e1rm;
-      }
-    }
-
-    return byDate.entries
-        .map((e) => (e.key, e.value))
-        .toList()
-      ..sort((a, b) => a.$1.compareTo(b.$1)); // oldest -> newest
-  }
-
-  PlateauResult? _plateauResultForCurrentFilter() {
-    final sessions = _getSessionData();
-    if (sessions == null) return null;
-    return PlateauDetector.analyse(sessions);
-  }
-
-  // Total working volume (kg) per calendar day for the selected exercise.
-  // Warm-up sets excluded - matches the same exclusion used for e1RM data.
-  List<(DateTime, double)>? _getSessionVolumeData() {
-    final query = _filterController.text.trim().toLowerCase();
-    if (query.isEmpty) return null;
     final matchedName = _exerciseNames.cast<String?>().firstWhere(
       (n) => n!.toLowerCase() == query,
       orElse: () => null,
     );
     if (matchedName == null) return null;
 
-    final byDate = <DateTime, double>{};
-    for (final workout in _allWorkouts) {
-      for (final ex in workout.exercises) {
-        if (ex.name.trim().toLowerCase() == matchedName.toLowerCase()) {
-          final d = workout.date.toDate();
-          final day = DateTime(d.year, d.month, d.day);
-          double vol = 0;
-          for (final s in ex.sets) {
-            if (!s.isWarmup) vol += s.weight * s.reps;
-          }
-          if (vol > 0) byDate[day] = (byDate[day] ?? 0) + vol;
-          break;
-        }
-      }
-    }
-    return byDate.entries
-        .map((e) => (e.key, e.value))
-        .toList()
-      ..sort((a, b) => a.$1.compareTo(b.$1));
-  }
-
-  PlateauResult? _volumeResultForCurrentFilter() {
-    final sessions = _getSessionVolumeData();
-    if (sessions == null) return null;
-    return PlateauDetector.analyse(sessions);
-  }
-
-  PlateauDiagnosis? _diagnosisForCurrentFilter() {
-    final result = _plateauResultForCurrentFilter();
-    if (result == null) return null;
-    if (result.status != PlateauStatus.plateau &&
-        result.status != PlateauStatus.regressing) {
-      return null;
-    }
-
-    // Volume is still rising - not a true plateau, suppress diagnosis.
-    if (_volumeResultForCurrentFilter()?.status == PlateauStatus.progressing) {
-      return null;
-    }
-
-    final query = _filterController.text.trim().toLowerCase();
-    if (query.isEmpty) return null;
-
-    final matchedName = _exerciseNames.cast<String?>().firstWhere(
-          (n) => n!.toLowerCase() == query,
-          orElse: () => null,
-        );
-    if (matchedName == null) return null;
-
-    return PlateauDiagnosisService.analyse(_allWorkouts, matchedName);
-  }
-
-  Widget _buildDiagnosisBanner() {
-    final diagnosis = _diagnosisForCurrentFilter();
-    if (diagnosis == null) return const SizedBox.shrink();
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.deepPurple.withAlpha(20),
-        border: Border.all(color: Colors.deepPurple.withAlpha(80)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.psychology_outlined,
-              color: Colors.deepPurple, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Likely Cause',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  diagnosis.title,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.deepPurple,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  diagnosis.message,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return ExerciseAnalyticsService.analyseExercise(
+      _allWorkouts,
+      matchedName,
+      referenceDate: DateTime.now(),
     );
   }
 
@@ -295,39 +271,315 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Progress')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const LoadingView()
           : _error != null
-              ? Center(
-                  child: Text(_error!,
-                      style: const TextStyle(color: Colors.red)))
-              : _allRecords.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No workouts logged yet.\nGo log your first workout!',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    )
-                  : Column(
-                      children: [
-                        if (_goalExercise != null &&
-                            _goalExercise!.isNotEmpty &&
-                            _goalTargetWeight > 0)
-                          _ProgressGoalCard(
-                            exercise: _goalExercise!,
-                            currentBest: _goalCurrentBest,
-                            targetWeight: _goalTargetWeight,
-                          ),
-                        _buildFilterBar(),
-                        _buildExerciseChips(),
-                        _buildPlateauBanner(),
-                        _buildDiagnosisBanner(),
-                        _buildChart(),
-                        Expanded(child: _buildWorkoutList()),
-                      ],
-                    ),
+          ? ErrorRetryView(
+              title: 'Couldn\'t load your workouts',
+              message: 'Check your connection and try again.',
+              onRetry: () {
+                setState(() {
+                  _loading = true;
+                  _error = null;
+                });
+                _loadWorkouts();
+              },
+            )
+          : _allRecords.isEmpty
+          ? const EmptyView(
+              icon: Icons.fitness_center,
+              message: 'No workouts logged yet.\nGo log your first workout!',
+            )
+          : _buildContent(),
     );
   }
+
+  Widget _buildContent() {
+    final detail = _detailForCurrentFilter();
+
+    return RefreshIndicator(
+      onRefresh: _loadWorkouts,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          if (_goalExercise != null &&
+              _goalExercise!.isNotEmpty &&
+              _goalTargetWeight > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: GoalCard(
+                exercise: _goalExercise!,
+                currentBest: _goalCurrentBest,
+                targetWeight: _goalTargetWeight,
+              ),
+            ),
+          if (_skippedCount > 0)
+            InlineNotice(
+              message:
+                  '$_skippedCount workout record${_skippedCount == 1 ? '' : 's'} '
+                  'couldn\'t be read and ${_skippedCount == 1 ? 'is' : 'are'} not shown.',
+            ),
+          _buildFilterBar(),
+          _buildExerciseChips(),
+          if (detail != null) ..._buildAnalyticsSections(detail),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: SectionHeader(
+              detail != null ? 'History: ${detail.exerciseName}' : 'History',
+            ),
+          ),
+          if (_filteredWorkouts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(
+                child: Text(
+                  'No matching workouts.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: Column(
+                children: [
+                  for (final w in _filteredWorkouts)
+                    WorkoutHistoryCard(
+                      workout: w,
+                      unit: weightUnitLabel(weightUnitNotifier.value),
+                      onDeleteSet: _deleteSet,
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Analytics sections (Phase 7)
+  // ---------------------------------------------------------------------
+
+  List<Widget> _buildAnalyticsSections(ExerciseDetail detail) {
+    final unit = weightUnitLabel(weightUnitNotifier.value);
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: _statusCard(detail, unit),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: _metricGrid(detail, unit),
+      ),
+      E1rmChart(sessions: detail.series.sessions, unit: unit),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: EvidencePanel(facts: _evidenceFacts(detail, unit)),
+      ),
+      if (detail.possibleExplanation != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: InsightCard(
+            icon: Icons.psychology_outlined,
+            color: Colors.deepPurple,
+            label: 'Possible explanation',
+            title: detail.possibleExplanation!.title,
+            message: detail.possibleExplanation!.message,
+          ),
+        ),
+    ];
+  }
+
+  Widget _statusCard(ExerciseDetail d, String unit) {
+    final slopePerWeek = kgToDisplayUnit(d.strengthSlopeKgPerDay, unit) * 7;
+    final trendLine =
+        'Trend: ${slopePerWeek >= 0 ? '+' : ''}${slopePerWeek.toStringAsFixed(2)} $unit/week.';
+
+    final (icon, color, title, message) = switch ((
+      d.strengthStatus,
+      d.volumeProgressionSuppressed,
+    )) {
+      (PlateauStatus.insufficientData, _) => (
+        Icons.hourglass_empty,
+        Colors.blueGrey,
+        'Not enough data yet',
+        'Log at least ${PlateauDetector.minSessions} sessions of this '
+            'exercise to see a strength trend.',
+      ),
+      (PlateauStatus.progressing, _) => (
+        Icons.trending_up,
+        Colors.green,
+        'Progressing',
+        'Estimated 1RM is trending up, based on the logged data. $trendLine',
+      ),
+      (_, true) => (
+        Icons.show_chart,
+        Colors.teal,
+        'Volume progressing',
+        'Peak strength looks flat, but total volume is rising - strength '
+            'gains often follow.',
+      ),
+      (PlateauStatus.plateau, _) => (
+        Icons.trending_flat,
+        Colors.orange,
+        'Possible plateau',
+        'Estimated 1RM has been flat lately, based on the logged data. '
+            '$trendLine',
+      ),
+      (_, _) => (
+        Icons.trending_down,
+        Colors.red,
+        'Possible regression',
+        'Estimated 1RM may be declining, based on the logged data. '
+            'Recovery, form or volume could all play a part. $trendLine',
+      ),
+    };
+
+    return InsightCard(
+      icon: icon,
+      color: color,
+      label: 'Strength Trend',
+      title: title,
+      message: message,
+    );
+  }
+
+  String _reasonLabel(MetricResult<Object> result) {
+    if (result is! MetricUnavailable) return '';
+    return switch ((result as MetricUnavailable).reason) {
+      InsufficiencyReason.zeroBaseline => 'no usable baseline',
+      InsufficiencyReason.noMatchingExercise => 'exercise not found',
+      _ => 'not enough data',
+    };
+  }
+
+  String _changeValue(MetricResult<PercentageChange> change) {
+    final c = change.valueOrNull;
+    if (c == null) return '—';
+    return '${c.percent >= 0 ? '+' : ''}${c.percent.toStringAsFixed(0)}%';
+  }
+
+  Widget _metricGrid(ExerciseDetail d, String unit) {
+    final recentBest = d.recentBest.valueOrNull;
+    final frequency = d.sessionsPerWeek.valueOrNull;
+
+    return Column(
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: StatCard(
+                icon: Icons.emoji_events_outlined,
+                label: 'Recent best (est. 1RM)',
+                value: recentBest != null
+                    ? '${formatWeight(kgToDisplayUnit(recentBest.e1RmKg, unit))} $unit'
+                    : '—',
+                subtitle: recentBest != null
+                    ? formatDayMonth(recentBest.day)
+                    : 'no sessions in last 4 weeks',
+              ),
+            ),
+            const SizedBox(width: Insets.md),
+            Expanded(
+              child: StatCard(
+                icon: Icons.event_repeat,
+                label: 'Frequency',
+                value: frequency != null
+                    ? '${frequency.toStringAsFixed(1)}×/week'
+                    : '—',
+                subtitle: frequency != null
+                    ? 'last 4 weeks'
+                    : _reasonLabel(d.sessionsPerWeek),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: Insets.md),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: StatCard(
+                icon: Icons.fitness_center,
+                label: 'Strength change',
+                value: _changeValue(d.strengthChange),
+                subtitle: d.strengthChange.isAvailable
+                    ? 'vs previous 4 weeks'
+                    : _reasonLabel(d.strengthChange),
+              ),
+            ),
+            const SizedBox(width: Insets.md),
+            Expanded(
+              child: StatCard(
+                icon: Icons.bar_chart,
+                label: 'Volume change',
+                value: _changeValue(d.volumeChange),
+                subtitle: d.volumeChange.isAvailable
+                    ? 'vs previous 4 weeks'
+                    : _reasonLabel(d.volumeChange),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  List<String> _evidenceFacts(ExerciseDetail d, String unit) {
+    final slopePerWeek = kgToDisplayUnit(d.strengthSlopeKgPerDay, unit) * 7;
+    final strength = d.strengthChange.valueOrNull;
+    final volume = d.volumeChange.valueOrNull;
+    final frequency = d.sessionsPerWeek.valueOrNull;
+
+    return [
+      '${d.totalSessions} valid session${d.totalSessions == 1 ? '' : 's'} '
+          'analysed across the full history; '
+          '${d.sessionsInWindow} in the last 4 weeks. Trends need at least '
+          '${PlateauDetector.minSessions}.',
+      'Comparison window: the last 4 weeks vs the 4 weeks before.',
+      if (d.strengthStatus != PlateauStatus.insufficientData)
+        'Estimated 1RM trend: ${slopePerWeek >= 0 ? '+' : ''}'
+            '${slopePerWeek.toStringAsFixed(2)} $unit/week. The plateau band '
+            'is ±0.1% per day of your average.',
+      if (strength != null)
+        'Best estimated 1RM went from '
+            '${formatWeight(kgToDisplayUnit(strength.baselineValue, unit))} to '
+            '${formatWeight(kgToDisplayUnit(strength.currentValue, unit))} $unit '
+            '(${_changeValue(d.strengthChange)}).'
+      else
+        'Strength change unavailable: ${_reasonLabel(d.strengthChange)}.',
+      if (volume != null)
+        'Total volume went from '
+            '${formatCompactWeight(kgToDisplayUnit(volume.baselineValue, unit))} to '
+            '${formatCompactWeight(kgToDisplayUnit(volume.currentValue, unit))} $unit '
+            '(${_changeValue(d.volumeChange)}).'
+      else
+        'Volume change unavailable: ${_reasonLabel(d.volumeChange)}.',
+      if (frequency != null)
+        'Training frequency: ${frequency.toStringAsFixed(1)} sessions/week '
+            'over the last 4 weeks.',
+      if (d.volumeProgressionSuppressed)
+        'A plateau concern was NOT raised because total volume is rising.',
+      if (_skippedCount > 0)
+        '$_skippedCount unreadable workout record'
+            '${_skippedCount == 1 ? ' was' : 's were'} skipped.',
+      'Data quality: ${_qualityLabel(d.dataQuality)}. Warm-up and invalid '
+          'sets are excluded from all calculations.',
+    ];
+  }
+
+  String _qualityLabel(DataQuality q) => switch (q) {
+    DataQuality.insufficient => 'insufficient',
+    DataQuality.limited => 'limited',
+    DataQuality.moderate => 'moderate',
+    DataQuality.strong => 'strong',
+  };
+
+  // ---------------------------------------------------------------------
+  // Filter + chips
+  // ---------------------------------------------------------------------
 
   Widget _buildFilterBar() {
     return Padding(
@@ -342,6 +594,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
           suffixIcon: _filterController.text.isNotEmpty
               ? IconButton(
                   icon: const Icon(Icons.clear),
+                  tooltip: 'Clear filter',
                   onPressed: () => _filterController.clear(),
                 )
               : null,
@@ -361,286 +614,38 @@ class _ProgressScreenState extends State<ProgressScreen> {
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final name = _exerciseNames[i];
-          final selected = _filterController.text.trim().toLowerCase() ==
-              name.toLowerCase();
+          final selected =
+              _filterController.text.trim().toLowerCase() == name.toLowerCase();
           return FilterChip(
             label: Text(name),
             selected: selected,
-            onSelected: (_) => selected
-                ? _filterController.clear()
-                : _selectExercise(name),
+            onSelected: (_) =>
+                selected ? _filterController.clear() : _selectExercise(name),
           );
         },
       ),
     );
   }
 
-  Widget _buildPlateauBanner() {
-    final result = _plateauResultForCurrentFilter();
-    if (result == null) return const SizedBox.shrink();
+  // ---------------------------------------------------------------------
+  // Deletion + history list (behaviour unchanged)
+  // ---------------------------------------------------------------------
 
-    final volumeResult = _volumeResultForCurrentFilter();
-    final volumeProgressing =
-        volumeResult?.status == PlateauStatus.progressing;
-
-    // Determine display values based on combined e1RM + volume classification.
-    final IconData icon;
-    final String label;
-    final String sublabel;
-    final Color color;
-
-    if (result.status == PlateauStatus.insufficientData) {
-      icon = Icons.hourglass_empty;
-      label = 'Not enough data';
-      sublabel = 'Log at least 5 sessions for this exercise to see a trend.';
-      color = Colors.grey;
-    } else if (result.status == PlateauStatus.progressing) {
-      icon = Icons.trending_up;
-      label = 'Progressing';
-      sublabel = 'Your 1RM is trending up - keep it up!';
-      color = Colors.green;
-    } else if (volumeProgressing) {
-      // e1RM is flat/declining but volume is rising - not a true plateau.
-      icon = Icons.show_chart;
-      label = 'Volume Progressing';
-      sublabel =
-          'Your peak weight is flat but total volume is rising - strength gains often follow.';
-      color = Colors.teal;
-    } else if (result.status == PlateauStatus.plateau) {
-      icon = Icons.trending_flat;
-      label = 'Plateau';
-      sublabel =
-          'Your 1RM has been flat lately. Try adding weight or varying reps.';
-      color = Colors.orange;
-    } else {
-      icon = Icons.trending_down;
-      label = 'Regressing';
-      sublabel = 'Your 1RM is trending down. Check recovery, form, or volume.';
-      color = Colors.red;
-    }
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: color.withAlpha(25),
-        border: Border.all(color: color.withAlpha(100)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  sublabel,
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurface),
-                ),
-                // Show e1RM weekly trend for all statuses except
-                // insufficientData and volumeProgressing (volume is
-                // in different units so a single slope line would confuse).
-                if (result.status != PlateauStatus.insufficientData &&
-                    !volumeProgressing)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Builder(builder: (_) {
-                      final isLbs = weightUnitNotifier.value == 'lbs';
-                      final slopePerWeek = isLbs
-                          ? result.slope * 2.20462 * 7
-                          : result.slope * 7;
-                      final u = isLbs ? 'lbs' : 'kg';
-                      return Text(
-                        'Trend: ${slopePerWeek >= 0 ? '+' : ''}${slopePerWeek.toStringAsFixed(2)} $u/week',
-                        style:
-                            TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                      );
-                    }),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildChart() {
-    final sessions = _getSessionData();
-    // Need at least 2 points to draw a line.
-    if (sessions == null || sessions.length < 2) return const SizedBox.shrink();
-
-    final isLbs = weightUnitNotifier.value == 'lbs';
-    final chartFactor = isLbs ? 2.20462 : 1.0;
-    final chartUnit = isLbs ? 'lbs' : 'kg';
-
-    // Build fl_chart spots: x = session index, y = best 1RM in display unit.
-    final spots = [
-      for (int i = 0; i < sessions.length; i++)
-        FlSpot(i.toDouble(), sessions[i].$2 * chartFactor),
-    ];
-
-    final e1rmValues = sessions.map((s) => s.$2 * chartFactor).toList();
-    final minY = (e1rmValues.reduce((a, b) => a < b ? a : b) - 5)
-        .clamp(0, double.infinity)
-        .toDouble();
-    final maxY = e1rmValues.reduce((a, b) => a > b ? a : b) + 5;
-
-    // How often to show an x-axis label: aim for at most 4 labels.
-    final labelStep = (sessions.length / 4).ceil().clamp(1, sessions.length);
-
-    final lineColor = Theme.of(context).colorScheme.primary;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Y-axis title, rotated 90°.
-              RotatedBox(
-                quarterTurns: 3,
-                child: Text(
-                  'Est. 1RM ($chartUnit)',
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: SizedBox(
-                  height: 180,
-                  child: LineChart(
-                    LineChartData(
-                      minY: minY,
-                      maxY: maxY,
-                      lineBarsData: [
-                        LineChartBarData(
-                          spots: spots,
-                          isCurved: false,
-                          color: lineColor,
-                          barWidth: 2,
-                          dotData: FlDotData(
-                            show: true,
-                            getDotPainter: (_, _, _, _) => FlDotCirclePainter(
-                              radius: 4,
-                              color: lineColor,
-                              strokeWidth: 0,
-                              strokeColor: Colors.transparent,
-                            ),
-                          ),
-                          belowBarData: BarAreaData(
-                            show: true,
-                            color: lineColor.withAlpha(25),
-                          ),
-                        ),
-                      ],
-                      titlesData: FlTitlesData(
-                        topTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false)),
-                        rightTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 28,
-                            interval: 1,
-                            getTitlesWidget: (value, meta) {
-                              final i = value.toInt();
-                              if (i < 0 || i >= sessions.length) {
-                                return const SizedBox.shrink();
-                              }
-                              if (i != 0 &&
-                                  i != sessions.length - 1 &&
-                                  i % labelStep != 0) {
-                                return const SizedBox.shrink();
-                              }
-                              final d = sessions[i].$1;
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text(
-                                  '${d.day} ${_monthName(d.month)}',
-                                  style: const TextStyle(fontSize: 10),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        leftTitles: AxisTitles(
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 44,
-                            getTitlesWidget: (value, meta) {
-                              if (value != meta.min &&
-                                  value != meta.max &&
-                                  value !=
-                                      ((meta.min + meta.max) / 2)
-                                          .roundToDouble()) {
-                                return const SizedBox.shrink();
-                              }
-                              return Text(
-                                '${value.toStringAsFixed(0)}$chartUnit',
-                                style: const TextStyle(fontSize: 10),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                      gridData: FlGridData(
-                        show: true,
-                        drawVerticalLine: false,
-                        horizontalInterval: (maxY - minY) / 4,
-                        getDrawingHorizontalLine: (_) => FlLine(
-                          color: Colors.grey.withAlpha(50),
-                          strokeWidth: 1,
-                        ),
-                      ),
-                      borderData: FlBorderData(show: false),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          // X-axis title.
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              'Session Date',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _deleteSet(String workoutId, String exerciseName,
-      int setIndex, double weight, int reps) async {
-    final isLbs = weightUnitNotifier.value == 'lbs';
-    final displayW = isLbs ? weight * 2.20462 : weight;
-    final unit = isLbs ? 'lbs' : 'kg';
+  Future<void> _deleteSet(
+    String workoutId,
+    String exerciseName,
+    int setIndex,
+    double weight,
+    int reps,
+  ) async {
+    final unit = weightUnitLabel(weightUnitNotifier.value);
+    final displayW = kgToDisplayUnit(weight, unit);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete entry?'),
         content: Text(
-          'Remove ${displayW.toStringAsFixed(displayW % 1 == 0 ? 0 : 1)} $unit × $reps reps '
+          'Remove ${formatWeight(displayW)} $unit × $reps reps '
           '($exerciseName)? This cannot be undone.',
         ),
         actions: [
@@ -650,8 +655,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child:
-                const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -659,39 +663,40 @@ class _ProgressScreenState extends State<ProgressScreen> {
     if (confirmed != true || !mounted) return;
 
     try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      await _workoutService.deleteSet(uid, workoutId, exerciseName, setIndex);
-
-      final workouts = await _workoutService.getWorkouts(uid);
-      double bestE1RM = 0;
-      for (final w in workouts) {
-        for (final ex in w.exercises) {
-          if (ex.name == exerciseName) {
-            for (final s in ex.sets) {
-              if (s.isWarmup) continue;
-              final e = estimatedOneRepMax(s.weight, s.reps);
-              if (e > bestE1RM) bestE1RM = e;
-            }
-          }
+      // The service performs the delete + PR recalculation and returns the
+      // fresh workout list (Phase 4) - no data orchestration in the screen.
+      final result = await _workoutService.deleteSetAndRecalculateRecord(
+        workoutId: workoutId,
+        exerciseName: exerciseName,
+        setIndex: setIndex,
+      );
+      final workouts = result.dataOrNull;
+      if (workouts == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to delete entry.')),
+          );
         }
+        return;
       }
-      await _firestoreService.updatePersonalRecords(
-          uid, {exerciseName: bestE1RM});
 
       if (!mounted) return;
       final records = _flattenToRecords(workouts);
-      final names =
-          records.map((r) => r.exerciseName).toSet().toList()..sort();
-      final profile = await _firestoreService.getUserProfile(uid);
+      final names = records.map((r) => r.exerciseName).toSet().toList()..sort();
+      final profile =
+          await (widget.profileLoader ?? _productionProfileLoader)();
       if (!mounted) return;
       setState(() {
         _allRecords = records;
         _allWorkouts = workouts;
         _exerciseNames = names;
-        _goalCurrentBest =
-            profile?.personalRecords[_goalExercise] ?? 0;
+        _goalCurrentBest = profile?.personalRecords[_goalExercise] ?? 0;
       });
       _applyFilter();
+      // notify other alive tabs; pre-set our version so the synchronous
+      // notification doesn't make this screen reload its own write.
+      _lastLoadedVersion = workoutDataVersion.value + 1;
+      workoutDataVersion.value++;
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -699,267 +704,5 @@ class _ProgressScreenState extends State<ProgressScreen> {
         );
       }
     }
-  }
-
-  Widget _buildWorkoutList() {
-    return RefreshIndicator(
-      onRefresh: _loadWorkouts,
-      child: _filteredWorkouts.isEmpty
-          ? ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Center(
-                    child: Text(
-                      'No workouts logged yet.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-              itemCount: _filteredWorkouts.length,
-              itemBuilder: (_, i) => _buildWorkoutCard(_filteredWorkouts[i]),
-            ),
-    );
-  }
-
-  Widget _buildWorkoutCard(WorkoutModel workout) {
-    final date = workout.date.toDate();
-    final dateStr =
-        '${date.day} ${_monthName(date.month)} ${date.year}';
-    final exerciseCount = workout.exercises.length;
-    final setCount =
-        workout.exercises.fold(0, (s, ex) => s + ex.sets.length);
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ExpansionTile(
-        leading: _feelLeading(workout.feelRating),
-        title: Text(
-          workout.name.isNotEmpty ? workout.name : dateStr,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text(
-          workout.name.isNotEmpty
-              ? '$dateStr  •  $exerciseCount exercise${exerciseCount == 1 ? '' : 's'}  •  $setCount set${setCount == 1 ? '' : 's'}'
-              : '$exerciseCount exercise${exerciseCount == 1 ? '' : 's'}  •  $setCount set${setCount == 1 ? '' : 's'}',
-          style: const TextStyle(fontSize: 12),
-        ),
-        children: [
-          ...workout.exercises.asMap().entries.map((entry) =>
-              _buildExerciseSection(
-                  workout, entry.value, entry.key < workout.exercises.length - 1)),
-          const SizedBox(height: 4),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildExerciseSection(
-      WorkoutModel workout, ExerciseEntry exercise, bool showDivider) {
-    final isLbs = weightUnitNotifier.value == 'lbs';
-    final factor = isLbs ? 2.20462 : 1.0;
-    final unit = isLbs ? 'lbs' : 'kg';
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 4, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(exercise.name,
-              style: const TextStyle(
-                  fontWeight: FontWeight.w600, fontSize: 14)),
-          const SizedBox(height: 4),
-          ...exercise.sets.asMap().entries.map((entry) {
-            final i = entry.key;
-            final s = entry.value;
-            final displayW = s.weight * factor;
-            final displayWStr = displayW.toStringAsFixed(displayW % 1 == 0 ? 0 : 1);
-            final e1rmKg = estimatedOneRepMax(s.weight, s.reps);
-            final displayE1rm = e1rmKg * factor;
-            return Row(
-              children: [
-                SizedBox(
-                  width: 44,
-                  child: Text(
-                    s.isWarmup ? 'W' : 'Set ${i + 1}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: s.isWarmup ? Colors.orange : Colors.grey,
-                      fontWeight: s.isWarmup
-                          ? FontWeight.bold
-                          : FontWeight.normal,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    '$displayWStr $unit × ${s.reps} reps',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ),
-                if (!s.isWarmup)
-                  Text(
-                    '${displayE1rm.toStringAsFixed(1)} $unit',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                if (s.isWarmup) const SizedBox(width: 48),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  color: Colors.red.shade300,
-                  tooltip: 'Delete entry',
-                  onPressed: () => _deleteSet(
-                      workout.id, exercise.name, i, s.weight, s.reps),
-                ),
-              ],
-            );
-          }),
-          if (showDivider) const Divider(height: 12),
-          if (!showDivider) const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-
-  Widget _feelLeading(int? rating) {
-    if (rating == null) {
-      return const Icon(Icons.fitness_center, color: Colors.grey, size: 20);
-    }
-    final color = rating >= 4
-        ? Colors.amber
-        : rating <= 2
-            ? Colors.orange
-            : Colors.grey;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.star, color: color, size: 16),
-        Text('$rating',
-            style: TextStyle(
-                fontSize: 10,
-                color: color,
-                fontWeight: FontWeight.bold)),
-      ],
-    );
-  }
-
-  String _monthName(int month) {
-    const names = [
-      '',
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    return names[month];
-  }
-}
-
-// Goal progress card shown at the top of the progress screen.
-class _ProgressGoalCard extends StatelessWidget {
-  final String exercise;
-  final double currentBest;
-  final double targetWeight;
-
-  const _ProgressGoalCard({
-    required this.exercise,
-    required this.currentBest,
-    required this.targetWeight,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isLbs = weightUnitNotifier.value == 'lbs';
-    final factor = isLbs ? 2.20462 : 1.0;
-    final unit = isLbs ? 'lbs' : 'kg';
-    final displayCurrent = currentBest * factor;
-    final displayTarget = targetWeight * factor;
-    final progress = (currentBest / targetWeight).clamp(0.0, 1.0);
-    final percent = (progress * 100).toStringAsFixed(0);
-    final achieved = currentBest >= targetWeight;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.deepPurple.withValues(alpha: 0.07),
-          border:
-              Border.all(color: Colors.deepPurple.withValues(alpha: 0.3)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.flag_outlined,
-                    color: Colors.deepPurple, size: 18),
-                const SizedBox(width: 6),
-                const Text(
-                  'Training Goal',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.deepPurple,
-                      fontWeight: FontWeight.w500),
-                ),
-                const Spacer(),
-                if (achieved)
-                  const Row(
-                    children: [
-                      Icon(Icons.check_circle,
-                          color: Colors.green, size: 16),
-                      SizedBox(width: 4),
-                      Text('Achieved!',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.green,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  )
-                else
-                  Text('$percent%',
-                      style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.deepPurple,
-                          fontWeight: FontWeight.w600)),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(exercise,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 2),
-            Text(
-              currentBest > 0
-                  ? 'Current best: ${displayCurrent.toStringAsFixed(1)} $unit  •  Target: ${displayTarget.toStringAsFixed(displayTarget % 1 == 0 ? 0 : 1)} $unit'
-                  : 'Target: ${displayTarget.toStringAsFixed(displayTarget % 1 == 0 ? 0 : 1)} $unit  •  No attempts yet',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-            ),
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 8,
-                backgroundColor:
-                    Colors.deepPurple.withValues(alpha: 0.15),
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  achieved ? Colors.green : Colors.deepPurple,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }

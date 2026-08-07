@@ -47,3 +47,10 @@ app.*.map.json
 # Firebase - contains API keys, do not commit
 google-services.json
 firebase_options.dart
+
+# Firestore rules test harness (Phase 10) - dependencies and emulator state
+test_rules/node_modules/
+.firebase/
+firestore-debug.log
+firebase-debug.log
+ui-debug.log

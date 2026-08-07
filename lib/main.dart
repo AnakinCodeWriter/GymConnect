@@ -1,18 +1,31 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
-import 'screens/home_screen.dart';
+import 'screens/app_shell.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/firestore_service.dart';
+import 'widgets/profile_gate.dart';
 
 // Global notifier - any screen can read or toggle the theme without prop drilling
 final themeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
 
 // Global notifier for weight unit preference ('kg' or 'lbs')
 final weightUnitNotifier = ValueNotifier<String>('kg');
+
+// Bumped whenever stored training data changes (workout saved, set deleted,
+// profile/goal saved) so tabs kept alive by the shell's IndexedStack can
+// reload instead of going stale (Phase 6; closes backlog #19/#20).
+// Listeners compare against the version they last loaded to avoid reloading
+// on their own writes.
+final workoutDataVersion = ValueNotifier<int>(0);
+
+// Set by the dashboard to preselect an exercise on the Progress tab
+// (tap a "Most trained" row -> switch tab with that exercise filtered).
+// The Progress screen consumes the value and resets it to null.
+final progressExerciseRequest = ValueNotifier<String?>(null);
 
 const _kThemeKey = 'dark_mode';
 const _kWeightUnitKey = 'weight_unit';
@@ -29,9 +42,7 @@ Future<void> saveWeightUnitPreference(String unit) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   // restore saved theme before the first frame
   final prefs = await SharedPreferences.getInstance();
   final isDark = prefs.getBool(_kThemeKey) ?? false;
@@ -92,28 +103,20 @@ class AuthWrapper extends StatelessWidget {
 }
 
 // checks if the logged-in user already has a firestore profile.
+// Lookup failures show an error state with retry/sign-out rather than
+// routing to onboarding, which could overwrite an existing profile.
 class ProfileChecker extends StatelessWidget {
   const ProfileChecker({super.key});
 
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    return FutureBuilder<bool>(
-      future: FirestoreService().userProfileExists(uid),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-        if (snapshot.hasError) {
-          return const OnboardingScreen();
-        }
-        if (snapshot.data == true) {
-          return const HomeScreen();
-        }
-        return const OnboardingScreen();
-      },
+    return ProfileGate(
+      checkProfileExists: () => FirestoreService().userProfileExists(uid),
+      homeBuilder: (_) => const AppShell(),
+      onboardingBuilder: (_) => const OnboardingScreen(),
+      // AuthWrapper listens to authStateChanges and will show LoginScreen.
+      onSignOut: () => FirebaseAuth.instance.signOut(),
     );
   }
 }

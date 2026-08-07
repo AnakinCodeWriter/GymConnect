@@ -1,0 +1,13 @@
+{
+  "name": "gymconnect-rules-tests",
+  "private": true,
+  "type": "module",
+  "description": "Firestore security-rules tests for GymConnect (Phase 10). Run from the repository root: npm --prefix test_rules test",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-gymconnect \"node --test firestore_rules.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}
